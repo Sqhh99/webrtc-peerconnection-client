@@ -1,8 +1,10 @@
-package server
+package main
 
 import (
 	"encoding/json"
+	"flag"
 	"log"
+	"net/http"
 	"sync"
 	"time"
 
@@ -38,6 +40,59 @@ type IceServer struct {
 	Credential string   `json:"credential,omitempty"`
 }
 
+var (
+	addr     = flag.String("addr", ":8081", "http service address")
+	upgrader = websocket.Upgrader{
+		CheckOrigin: func(r *http.Request) bool {
+			return true // 允许所有来源
+		},
+	}
+	server *WebRTCSignalingServer
+)
+
+func main() {
+	flag.Parse()
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
+
+	server = NewWebRTCSignalingServer()
+
+	http.HandleFunc("/ws/webrtc", handleWebRTCConnection)
+	http.HandleFunc("/health", handleHealth)
+
+	log.Printf("WebRTC信令服务器启动在 %s", *addr)
+	log.Printf("WebSocket地址: ws://localhost%s/ws/webrtc?uid=YOUR_CLIENT_ID", *addr)
+
+	if err := http.ListenAndServe(*addr, nil); err != nil {
+		log.Fatal("启动服务器失败:", err)
+	}
+}
+
+// handleHealth 健康检查接口
+func handleHealth(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("OK"))
+}
+
+// handleWebRTCConnection 处理WebRTC WebSocket连接
+func handleWebRTCConnection(w http.ResponseWriter, r *http.Request) {
+	// 从URL参数获取客户端ID
+	uid := r.URL.Query().Get("uid")
+	if uid == "" {
+		log.Printf("缺少uid参数")
+		http.Error(w, "Missing uid parameter", http.StatusBadRequest)
+		return
+	}
+
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("WebSocket升级失败: %v", err)
+		return
+	}
+
+	log.Printf("新的WebRTC连接: uid=%s, remote=%s", uid, r.RemoteAddr)
+	server.HandleConnection(conn, uid)
+}
+
 // NewWebRTCSignalingServer 创建新的WebRTC信令服务器
 func NewWebRTCSignalingServer() *WebRTCSignalingServer {
 	return &WebRTCSignalingServer{
@@ -59,14 +114,12 @@ func (s *WebRTCSignalingServer) HandleConnection(conn *websocket.Conn, uid strin
 	if existingClient, ok := s.clients[uid]; ok {
 		// 关闭旧连接
 		log.Printf("检测到重复登录，关闭旧连接: %s", uid)
-		// 先从 map 中删除，避免 removeClient 再次删除
 		delete(s.clients, uid)
 		s.mutex.Unlock()
 
 		// 在锁外关闭旧连接，避免死锁
 		go func() {
 			existingClient.conn.Close()
-			// 安全地关闭 channel
 			defer func() {
 				if r := recover(); r != nil {
 					log.Printf("关闭旧连接 send channel 时发生 panic: %v", r)
@@ -80,7 +133,7 @@ func (s *WebRTCSignalingServer) HandleConnection(conn *websocket.Conn, uid strin
 	s.clients[uid] = client
 	s.mutex.Unlock()
 
-	log.Printf("WebRTC客户端连接: %s", uid)
+	log.Printf("WebRTC客户端连接成功: %s (当前在线: %d)", uid, s.getClientCount())
 
 	// 启动读写协程
 	go client.writePump()
@@ -93,9 +146,16 @@ func (s *WebRTCSignalingServer) HandleConnection(conn *websocket.Conn, uid strin
 	}()
 }
 
+// getClientCount 获取当前在线客户端数量
+func (s *WebRTCSignalingServer) getClientCount() int {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+	return len(s.clients)
+}
+
 // sendRegisteredMessage 发送注册确认消息
 func (s *WebRTCSignalingServer) sendRegisteredMessage(client *WebRTCClient) {
-	log.Printf("开始发送注册消息给客户端: %s", client.uid)
+	log.Printf("发送注册消息给客户端: %s", client.uid)
 
 	iceServers := s.getIceServers()
 	payload := map[string]interface{}{
@@ -117,9 +177,9 @@ func (s *WebRTCSignalingServer) sendRegisteredMessage(client *WebRTCClient) {
 
 	select {
 	case client.send <- data:
-		log.Printf("成功发送注册消息给客户端: %s", client.uid)
+		log.Printf("✓ 注册消息发送成功: %s", client.uid)
 	default:
-		log.Printf("客户端发送缓冲区已满: %s", client.uid)
+		log.Printf("✗ 客户端发送缓冲区已满: %s", client.uid)
 		return
 	}
 
@@ -141,13 +201,13 @@ func (s *WebRTCSignalingServer) getIceServers() []IceServer {
 		{
 			URLs: []string{"stun:stun1.l.google.com:19302"},
 		},
-		// 你自己的 TURN 服务器 (UDP)
+		// 自定义 TURN 服务器 (UDP)
 		{
 			URLs:       []string{"turn:113.46.159.182:3478"},
 			Username:   "myuser",
 			Credential: "mypassword",
 		},
-		// 你自己的 TURN 服务器 (TCP)
+		// 自定义 TURN 服务器 (TCP)
 		{
 			URLs:       []string{"turn:113.46.159.182:3478?transport=tcp"},
 			Username:   "myuser",
@@ -176,10 +236,9 @@ func (s *WebRTCSignalingServer) getIceServers() []IceServer {
 func (s *WebRTCSignalingServer) removeClient(client *WebRTCClient) {
 	s.mutex.Lock()
 	// 只有当 map 中的客户端就是当前这个客户端时才删除
-	// 避免删除已经重新连接的新客户端
 	if existingClient, ok := s.clients[client.uid]; ok && existingClient == client {
 		delete(s.clients, client.uid)
-		log.Printf("WebRTC客户端断开: %s", client.uid)
+		log.Printf("WebRTC客户端断开: %s (剩余在线: %d)", client.uid, len(s.clients))
 
 		// 通知其他客户端该用户已下线
 		go s.notifyUserOffline(client.uid)
@@ -240,7 +299,7 @@ func (s *WebRTCSignalingServer) relayMessage(senderUID string, msg *WebRTCMessag
 	s.mutex.RUnlock()
 
 	if !ok {
-		log.Printf("目标客户端不在线: %s", msg.To)
+		log.Printf("✗ 目标客户端不在线: %s", msg.To)
 		return
 	}
 
@@ -252,9 +311,9 @@ func (s *WebRTCSignalingServer) relayMessage(senderUID string, msg *WebRTCMessag
 
 	select {
 	case targetClient.send <- data:
-		log.Printf("消息转发成功: %s -> %s (type: %s)", senderUID, msg.To, msg.Type)
+		log.Printf("✓ 消息转发: %s -> %s (type: %s)", senderUID, msg.To, msg.Type)
 	default:
-		log.Printf("目标客户端发送缓冲区已满: %s", msg.To)
+		log.Printf("✗ 目标客户端发送缓冲区已满: %s", msg.To)
 	}
 }
 
@@ -267,7 +326,7 @@ func (s *WebRTCSignalingServer) broadcastClientList() {
 	}
 	s.mutex.RUnlock()
 
-	log.Printf("广播客户端列表，当前在线用户数: %d", len(clients))
+	log.Printf("广播客户端列表 (在线: %d)", len(clients))
 
 	payload := map[string]interface{}{
 		"clients": clients,
@@ -291,7 +350,6 @@ func (s *WebRTCSignalingServer) broadcastClientList() {
 	for _, client := range s.clients {
 		select {
 		case client.send <- data:
-			log.Printf("广播客户端列表成功给 %s", client.uid)
 		default:
 			log.Printf("广播客户端列表失败: %s", client.uid)
 		}
@@ -307,10 +365,7 @@ func (s *WebRTCSignalingServer) sendClientList(client *WebRTCClient) {
 	}
 	s.mutex.RUnlock()
 
-	log.Printf("发送客户端列表给 %s，在线用户数: %d", client.uid, len(clients))
-	for _, c := range clients {
-		log.Printf("  - 在线用户: %s", c["id"])
-	}
+	log.Printf("发送客户端列表给 %s (在线: %d)", client.uid, len(clients))
 
 	payload := map[string]interface{}{
 		"clients": clients,
@@ -330,9 +385,9 @@ func (s *WebRTCSignalingServer) sendClientList(client *WebRTCClient) {
 
 	select {
 	case client.send <- data:
-		log.Printf("成功发送客户端列表给 %s", client.uid)
+		log.Printf("✓ 客户端列表发送成功: %s", client.uid)
 	default:
-		log.Printf("发送客户端列表失败: %s", client.uid)
+		log.Printf("✗ 发送客户端列表失败: %s", client.uid)
 	}
 }
 
@@ -371,7 +426,7 @@ func (c *WebRTCClient) readPump() {
 		// 设置发送者
 		msg.From = c.uid
 
-		log.Printf("收到WebRTC消息: type=%s, from=%s, to=%s", msg.Type, msg.From, msg.To)
+		log.Printf("收到消息: type=%s, from=%s, to=%s", msg.Type, msg.From, msg.To)
 
 		switch msg.Type {
 		case "register":
@@ -388,7 +443,7 @@ func (c *WebRTCClient) readPump() {
 			}
 			c.server.relayMessage(c.uid, &msg)
 		default:
-			log.Printf("未知的WebRTC消息类型: %s", msg.Type)
+			log.Printf("未知的消息类型: %s", msg.Type)
 		}
 	}
 }
@@ -411,7 +466,7 @@ func (c *WebRTCClient) writePump() {
 			}
 
 			if err := c.conn.WriteMessage(websocket.TextMessage, message); err != nil {
-				log.Printf("写入WebRTC消息失败: %v", err)
+				log.Printf("写入消息失败: %v", err)
 				return
 			}
 
