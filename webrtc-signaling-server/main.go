@@ -56,11 +56,16 @@ func main() {
 
 	server = NewWebRTCSignalingServer()
 
+	// 静态文件服务
+	http.Handle("/", http.FileServer(http.Dir("./static")))
+
+	// WebSocket端点
 	http.HandleFunc("/ws/webrtc", handleWebRTCConnection)
 	http.HandleFunc("/health", handleHealth)
 
 	log.Printf("WebRTC信令服务器启动在 %s", *addr)
 	log.Printf("WebSocket地址: ws://localhost%s/ws/webrtc?uid=YOUR_CLIENT_ID", *addr)
+	log.Printf("Web应用地址: http://localhost%s", *addr)
 
 	if err := http.ListenAndServe(*addr, nil); err != nil {
 		log.Fatal("启动服务器失败:", err)
