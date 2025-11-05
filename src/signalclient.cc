@@ -146,7 +146,10 @@ void SignalClient::SendOffer(const QString& to, const QJsonObject& sdp) {
   message["type"] = "offer";
   message["from"] = client_id_;
   message["to"] = to;
-  message["payload"] = sdp;
+
+  QJsonObject payload;
+  payload["sdp"] = sdp;
+  message["payload"] = payload;
   
   qDebug() << "Sending offer message:" << message;
   SendMessage(message);
@@ -157,7 +160,10 @@ void SignalClient::SendAnswer(const QString& to, const QJsonObject& sdp) {
   message["type"] = "answer";
   message["from"] = client_id_;
   message["to"] = to;
-  message["payload"] = sdp;
+
+  QJsonObject payload;
+  payload["sdp"] = sdp;
+  message["payload"] = payload;
   
   SendMessage(message);
 }
@@ -167,7 +173,10 @@ void SignalClient::SendIceCandidate(const QString& to, const QJsonObject& candid
   message["type"] = "ice-candidate";
   message["from"] = client_id_;
   message["to"] = to;
-  message["payload"] = candidate;
+
+  QJsonObject payload;
+  payload["candidate"] = candidate;
+  message["payload"] = payload;
   
   SendMessage(message);
 }

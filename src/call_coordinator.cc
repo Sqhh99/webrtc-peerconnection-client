@@ -9,6 +9,59 @@
 #include <QMetaObject>
 #include <QJsonDocument>
 
+namespace {
+
+QJsonObject ExtractSdpPayload(const QJsonObject& payload) {
+  if (payload.contains("sdp")) {
+    const auto sdp_value = payload.value("sdp");
+    if (sdp_value.isObject()) {
+      return sdp_value.toObject();
+    }
+    if (sdp_value.isString()) {
+      QJsonObject converted;
+      converted["type"] = payload.value("type").toString();
+      converted["sdp"] = sdp_value.toString();
+      return converted;
+    }
+  }
+  return payload;
+}
+
+QString ExtractSdpText(const QJsonObject& payload) {
+  if (payload.contains("sdp")) {
+    const auto sdp_value = payload.value("sdp");
+    if (sdp_value.isString()) {
+      return sdp_value.toString();
+    }
+    if (sdp_value.isObject()) {
+      return sdp_value.toObject().value("sdp").toString();
+    }
+  }
+  return QString();
+}
+
+QJsonObject ExtractCandidatePayload(const QJsonObject& payload) {
+  if (payload.contains("candidate")) {
+    const auto candidate_value = payload.value("candidate");
+    if (candidate_value.isObject()) {
+      return candidate_value.toObject();
+    }
+  }
+  return payload;
+}
+
+int ExtractMLineIndex(const QJsonObject& candidate) {
+  if (candidate.contains("sdpMLineIndex")) {
+    return candidate.value("sdpMLineIndex").toInt();
+  }
+  if (candidate.contains("sdpMlineIndex")) {
+    return candidate.value("sdpMlineIndex").toInt();
+  }
+  return -1;
+}
+
+}  // namespace
+
 // ============================================================================
 // 构造和析构
 // ============================================================================
@@ -492,7 +545,15 @@ void CallCoordinator::ProcessOffer(const std::string& from, const QJsonObject& s
     ui_observer_->OnLogMessage("正在处理来自 " + from + " 的offer", "info");
   }
   
-  std::string sdp_str = sdp["sdp"].toString().toStdString();
+  const QJsonObject sdp_payload = ExtractSdpPayload(sdp);
+  const QString sdp_text = ExtractSdpText(sdp_payload);
+  if (sdp_text.isEmpty()) {
+    RTC_LOG(LS_ERROR) << "Offer payload missing SDP text";
+    qDebug() << "ERROR: Offer payload missing SDP text";
+    return;
+  }
+
+  std::string sdp_str = sdp_text.toStdString();
   qDebug() << "Calling SetRemoteOffer...";
   webrtc_engine_->SetRemoteOffer(sdp_str);
   qDebug() << "Calling CreateAnswer...";
@@ -503,16 +564,37 @@ void CallCoordinator::ProcessOffer(const std::string& from, const QJsonObject& s
 void CallCoordinator::ProcessAnswer(const std::string& from, const QJsonObject& sdp) {
   RTC_LOG(LS_INFO) << "Processing answer from: " << from;
   
-  std::string sdp_str = sdp["sdp"].toString().toStdString();
+  const QJsonObject sdp_payload = ExtractSdpPayload(sdp);
+  const QString sdp_text = ExtractSdpText(sdp_payload);
+  if (sdp_text.isEmpty()) {
+    RTC_LOG(LS_ERROR) << "Answer payload missing SDP text";
+    qDebug() << "ERROR: Answer payload missing SDP text";
+    return;
+  }
+
+  std::string sdp_str = sdp_text.toStdString();
   webrtc_engine_->SetRemoteAnswer(sdp_str);
 }
 
 void CallCoordinator::ProcessIceCandidate(const std::string& from, const QJsonObject& candidate) {
   RTC_LOG(LS_INFO) << "Processing ICE candidate from: " << from;
   
-  std::string sdp_mid = candidate["sdpMid"].toString().toStdString();
-  int sdp_mline_index = candidate["sdpMLineIndex"].toInt();
-  std::string sdp = candidate["candidate"].toString().toStdString();
+  const QJsonObject candidate_payload = ExtractCandidatePayload(candidate);
+  const QString sdp_mid_value = candidate_payload.value("sdpMid").toString();
+  const int sdp_mline_index = ExtractMLineIndex(candidate_payload);
+  const QString candidate_text = candidate_payload.value("candidate").toString();
+
+  if (sdp_mid_value.isEmpty() || sdp_mline_index < 0 || candidate_text.isEmpty()) {
+    RTC_LOG(LS_ERROR) << "ICE candidate payload incomplete";
+    qDebug() << "ERROR: ICE candidate payload incomplete"
+             << "sdpMid:" << sdp_mid_value
+             << "mline:" << sdp_mline_index
+             << "candidate:" << candidate_text.left(32);
+    return;
+  }
+  
+  std::string sdp_mid = sdp_mid_value.toStdString();
+  std::string sdp = candidate_text.toStdString();
   
   webrtc_engine_->AddIceCandidate(sdp_mid, sdp_mline_index, sdp);
 }
