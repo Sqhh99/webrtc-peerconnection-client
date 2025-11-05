@@ -206,18 +206,6 @@ func (s *WebRTCSignalingServer) getIceServers() []IceServer {
 		{
 			URLs: []string{"stun:stun1.l.google.com:19302"},
 		},
-		// 自定义 TURN 服务器 (UDP)
-		{
-			URLs:       []string{"turn:113.46.159.182:3478"},
-			Username:   "myuser",
-			Credential: "mypassword",
-		},
-		// 自定义 TURN 服务器 (TCP)
-		{
-			URLs:       []string{"turn:113.46.159.182:3478?transport=tcp"},
-			Username:   "myuser",
-			Credential: "mypassword",
-		},
 		// 公共 TURN 服务器作为备份
 		{
 			URLs:       []string{"turn:openrelay.metered.ca:80"},
