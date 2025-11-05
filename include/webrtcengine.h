@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 #include <deque>
+#include <functional>
 #include "api/environment/environment.h"
 #include "api/peer_connection_interface.h"
 #include "api/peer_connection_interface.h"
@@ -72,6 +73,7 @@ class WebRTCEngine {
   // 查询状态
   bool IsConnected() const;
   bool HasPeerConnection() const { return peer_connection_ != nullptr; }
+  void CollectStats(std::function<void(const webrtc::scoped_refptr<const webrtc::RTCStatsReport>&)> callback);
   
   // 生命周期
   void Shutdown();
@@ -80,6 +82,7 @@ class WebRTCEngine {
   // 内部观察者类声明
   class PeerConnectionObserverImpl;
   class CreateSessionDescriptionObserverImpl;
+  class StatsCollectorCallback;
   
   void SetRemoteDescription(const std::string& type, const std::string& sdp);
   void ProcessPendingIceCandidates();

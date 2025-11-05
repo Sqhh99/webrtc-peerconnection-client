@@ -2,6 +2,7 @@
 #define ICALL_OBSERVER_H_GUARD
 
 #include <string>
+#include <cstdint>
 #include "api/media_stream_interface.h"
 #include "callmanager.h"
 #include <QJsonArray>
@@ -38,6 +39,23 @@ class ICallUIObserver {
 
 // 业务控制接口 - 定义UI层可以调用的业务方法
 // UI层通过这个接口与业务层交互，而不是直接调用内部组件
+struct RtcStatsSnapshot {
+  bool valid = false;
+  std::string ice_state;
+  std::string local_candidate_summary;
+  std::string remote_candidate_summary;
+  double outbound_bitrate_kbps = 0.0;
+  double inbound_bitrate_kbps = 0.0;
+  double current_rtt_ms = 0.0;
+  double inbound_audio_jitter_ms = 0.0;
+  double inbound_audio_packet_loss_percent = 0.0;
+  double inbound_video_packet_loss_percent = 0.0;
+  double inbound_video_fps = 0.0;
+  int inbound_video_width = 0;
+  int inbound_video_height = 0;
+  uint64_t timestamp_ms = 0;
+};
+
 class ICallController {
  public:
   virtual ~ICallController() = default;
@@ -62,6 +80,9 @@ class ICallController {
   virtual CallState GetCallState() const = 0;
   virtual std::string GetCurrentPeerId() const = 0;
   virtual std::string GetClientId() const = 0;
+  
+  // WebRTC实时数据
+  virtual RtcStatsSnapshot GetLatestRtcStats() = 0;
 };
 
 #endif  // ICALL_OBSERVER_H_GUARD

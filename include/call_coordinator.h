@@ -3,6 +3,7 @@
 
 #include <memory>
 #include <string>
+#include <mutex>
 
 // Fix Qt emit macro conflict with WebRTC sigslot
 #ifdef emit
@@ -24,6 +25,10 @@
 #include "callmanager.h"
 #include <QJsonObject>
 #include <QJsonArray>
+
+namespace webrtc {
+class RTCStatsReport;
+}
 
 // CallCoordinator - 业务协调器（原Conductor的重构版）
 // 职责：协调WebRTC引擎、信令客户端和呼叫管理器
@@ -53,6 +58,7 @@ class CallCoordinator : public WebRTCEngineObserver,
   CallState GetCallState() const override;
   std::string GetCurrentPeerId() const override;
   std::string GetClientId() const override;
+  RtcStatsSnapshot GetLatestRtcStats() override;
 
  private:
   // WebRTCEngineObserver 实现
@@ -95,7 +101,9 @@ class CallCoordinator : public WebRTCEngineObserver,
   void ProcessOffer(const std::string& from, const QJsonObject& sdp);
   void ProcessAnswer(const std::string& from, const QJsonObject& sdp);
   void ProcessIceCandidate(const std::string& from, const QJsonObject& candidate);
-  
+  void ExtractAndStoreRtcStats(const webrtc::scoped_refptr<const webrtc::RTCStatsReport>& report);
+  std::string IceStateToString(webrtc::PeerConnectionInterface::IceConnectionState state) const;
+
   // 组件
   const webrtc::Environment env_;
   std::unique_ptr<WebRTCEngine> webrtc_engine_;
@@ -109,6 +117,18 @@ class CallCoordinator : public WebRTCEngineObserver,
   std::string current_peer_id_;
   bool is_caller_;
   std::vector<IceServerConfig> ice_servers_;
+  std::string last_ice_state_;
+
+  mutable std::mutex stats_mutex_;
+  RtcStatsSnapshot last_stats_;
+  bool has_stats_ = false;
+  struct RateSample {
+    uint64_t inbound_bytes = 0;
+    uint64_t outbound_bytes = 0;
+    uint64_t timestamp_ms = 0;
+    bool valid = false;
+  };
+  RateSample last_rate_sample_;
 };
 
 #endif  // CALL_COORDINATOR_H_GUARD

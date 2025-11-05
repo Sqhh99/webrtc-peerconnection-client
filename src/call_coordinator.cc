@@ -6,8 +6,11 @@
 
 #include "call_coordinator.h"
 #include "rtc_base/logging.h"
+
 #include <QMetaObject>
 #include <QJsonDocument>
+
+#include "api/stats/rtcstats_objects.h"
 
 namespace {
 
@@ -67,7 +70,10 @@ int ExtractMLineIndex(const QJsonObject& candidate) {
 // ============================================================================
 
 CallCoordinator::CallCoordinator(const webrtc::Environment& env)
-    : env_(env), ui_observer_(nullptr), is_caller_(false) {
+    : env_(env),
+      ui_observer_(nullptr),
+      is_caller_(false),
+      last_ice_state_("未连接") {
   // 创建WebRTC引擎
   webrtc_engine_ = std::make_unique<WebRTCEngine>(env);
   webrtc_engine_->SetObserver(this);
@@ -78,6 +84,11 @@ CallCoordinator::CallCoordinator(const webrtc::Environment& env)
   // 创建呼叫管理器
   call_manager_ = std::make_unique<CallManager>(nullptr);
   call_manager_->SetSignalClient(signal_client_.get());
+
+  last_stats_.ice_state = last_ice_state_;
+  last_stats_.valid = false;
+  last_stats_.local_candidate_summary = "-";
+  last_stats_.remote_candidate_summary = "-";
 }
 
 CallCoordinator::~CallCoordinator() {
@@ -179,6 +190,22 @@ std::string CallCoordinator::GetClientId() const {
   return signal_client_ ? signal_client_->GetClientId().toStdString() : "";
 }
 
+RtcStatsSnapshot CallCoordinator::GetLatestRtcStats() {
+  if (webrtc_engine_ && webrtc_engine_->HasPeerConnection()) {
+    webrtc_engine_->CollectStats([this](const webrtc::scoped_refptr<const webrtc::RTCStatsReport>& report) {
+      ExtractAndStoreRtcStats(report);
+    });
+  }
+  
+  std::lock_guard<std::mutex> lock(stats_mutex_);
+  if (!has_stats_) {
+    RtcStatsSnapshot snapshot = last_stats_;
+    snapshot.valid = false;
+    return snapshot;
+  }
+  return last_stats_;
+}
+
 // ============================================================================
 // WebRTCEngineObserver 实现 - 处理WebRTC引擎的回调
 // ============================================================================
@@ -206,6 +233,12 @@ void CallCoordinator::OnRemoteVideoTrackRemoved() {
 
 void CallCoordinator::OnIceConnectionStateChanged(webrtc::PeerConnectionInterface::IceConnectionState state) {
   RTC_LOG(LS_INFO) << "ICE connection state changed: " << state;
+  std::string state_text = IceStateToString(state);
+  {
+    std::lock_guard<std::mutex> lock(stats_mutex_);
+    last_ice_state_ = state_text;
+    last_stats_.ice_state = state_text;
+  }
   
   if (state == webrtc::PeerConnectionInterface::kIceConnectionConnected ||
       state == webrtc::PeerConnectionInterface::kIceConnectionCompleted) {
@@ -597,4 +630,157 @@ void CallCoordinator::ProcessIceCandidate(const std::string& from, const QJsonOb
   std::string sdp = candidate_text.toStdString();
   
   webrtc_engine_->AddIceCandidate(sdp_mid, sdp_mline_index, sdp);
+}
+
+void CallCoordinator::ExtractAndStoreRtcStats(
+    const webrtc::scoped_refptr<const webrtc::RTCStatsReport>& report) {
+  if (!report) {
+    return;
+  }
+
+  RtcStatsSnapshot snapshot;
+  snapshot.valid = true;
+  snapshot.timestamp_ms =
+      static_cast<uint64_t>(report->timestamp().us() / 1000);
+  snapshot.ice_state = last_ice_state_;
+  snapshot.local_candidate_summary = "-";
+  snapshot.remote_candidate_summary = "-";
+
+  uint64_t inbound_bytes = 0;
+  uint64_t outbound_bytes = 0;
+
+  const webrtc::RTCInboundRtpStreamStats* audio_inbound = nullptr;
+  const webrtc::RTCInboundRtpStreamStats* video_inbound = nullptr;
+
+  const auto inbound_stats = report->GetStatsOfType<webrtc::RTCInboundRtpStreamStats>();
+  for (const auto* stat : inbound_stats) {
+    inbound_bytes += stat->bytes_received.value_or(0u);
+    const std::string kind = stat->kind.value_or("");
+    if (!audio_inbound && kind == "audio") {
+      audio_inbound = stat;
+    } else if (!video_inbound && kind == "video") {
+      video_inbound = stat;
+    }
+  }
+
+  const auto outbound_stats = report->GetStatsOfType<webrtc::RTCOutboundRtpStreamStats>();
+  for (const auto* stat : outbound_stats) {
+    outbound_bytes += stat->bytes_sent.value_or(0u);
+  }
+
+  const auto candidate_pairs = report->GetStatsOfType<webrtc::RTCIceCandidatePairStats>();
+  const webrtc::RTCIceCandidatePairStats* selected_pair = nullptr;
+  for (const auto* pair : candidate_pairs) {
+    // 检查状态是否为 succeeded（选中的候选对）
+    // 在新版本中，使用 nominated 和 state 字段
+    if (pair->nominated.value_or(false) && pair->state.has_value()) {
+      std::string state_str = *pair->state;
+      if (state_str == "succeeded") {
+        selected_pair = pair;
+        break;
+      }
+    }
+  }
+
+  if (selected_pair) {
+    const double rtt_seconds =
+        selected_pair->current_round_trip_time.value_or(0.0);
+    snapshot.current_rtt_ms = rtt_seconds * 1000.0;
+
+    const double outgoing_bps =
+        selected_pair->available_outgoing_bitrate.value_or(0.0);
+    const double incoming_bps =
+        selected_pair->available_incoming_bitrate.value_or(0.0);
+
+    if (outgoing_bps > 0.0) {
+      snapshot.outbound_bitrate_kbps = outgoing_bps / 1000.0;
+    }
+    if (incoming_bps > 0.0) {
+      snapshot.inbound_bitrate_kbps = incoming_bps / 1000.0;
+    }
+  }
+
+  if (audio_inbound) {
+    const double jitter_seconds = audio_inbound->jitter.value_or(0.0);
+    snapshot.inbound_audio_jitter_ms = jitter_seconds * 1000.0;
+
+    const double packets_lost =
+        static_cast<double>(audio_inbound->packets_lost.value_or(0));
+    const double packets_received =
+        static_cast<double>(audio_inbound->packets_received.value_or(0u));
+    const double total_audio_packets = packets_lost + packets_received;
+    if (total_audio_packets > 0.0) {
+      snapshot.inbound_audio_packet_loss_percent =
+          (packets_lost / total_audio_packets) * 100.0;
+    }
+  }
+
+  if (video_inbound) {
+    const double packets_lost =
+        static_cast<double>(video_inbound->packets_lost.value_or(0));
+    const double packets_received =
+        static_cast<double>(video_inbound->packets_received.value_or(0u));
+    const double total_video_packets = packets_lost + packets_received;
+    if (total_video_packets > 0.0) {
+      snapshot.inbound_video_packet_loss_percent =
+          (packets_lost / total_video_packets) * 100.0;
+    }
+
+    snapshot.inbound_video_fps =
+        video_inbound->frames_per_second.value_or(0.0);
+    snapshot.inbound_video_width =
+        video_inbound->frame_width.value_or(0);
+    snapshot.inbound_video_height =
+        video_inbound->frame_height.value_or(0);
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(stats_mutex_);
+    if (last_rate_sample_.valid) {
+      const uint64_t delta_ms =
+          snapshot.timestamp_ms - last_rate_sample_.timestamp_ms;
+      if (delta_ms > 0) {
+        const double inbound_delta =
+            static_cast<double>(inbound_bytes - last_rate_sample_.inbound_bytes);
+        const double outbound_delta =
+            static_cast<double>(outbound_bytes - last_rate_sample_.outbound_bytes);
+        if (snapshot.inbound_bitrate_kbps <= 0.0 && inbound_delta >= 0.0) {
+          snapshot.inbound_bitrate_kbps = (inbound_delta * 8.0) / delta_ms;
+        }
+        if (snapshot.outbound_bitrate_kbps <= 0.0 && outbound_delta >= 0.0) {
+          snapshot.outbound_bitrate_kbps = (outbound_delta * 8.0) / delta_ms;
+        }
+      }
+    }
+
+    last_rate_sample_.inbound_bytes = inbound_bytes;
+    last_rate_sample_.outbound_bytes = outbound_bytes;
+    last_rate_sample_.timestamp_ms = snapshot.timestamp_ms;
+    last_rate_sample_.valid = true;
+
+    last_stats_ = snapshot;
+    has_stats_ = true;
+  }
+}
+
+std::string CallCoordinator::IceStateToString(
+    webrtc::PeerConnectionInterface::IceConnectionState state) const {
+  switch (state) {
+    case webrtc::PeerConnectionInterface::kIceConnectionNew:
+      return "新建";
+    case webrtc::PeerConnectionInterface::kIceConnectionChecking:
+      return "检查中";
+    case webrtc::PeerConnectionInterface::kIceConnectionConnected:
+      return "已连接";
+    case webrtc::PeerConnectionInterface::kIceConnectionCompleted:
+      return "已完成";
+    case webrtc::PeerConnectionInterface::kIceConnectionFailed:
+      return "失败";
+    case webrtc::PeerConnectionInterface::kIceConnectionDisconnected:
+      return "断开";
+    case webrtc::PeerConnectionInterface::kIceConnectionClosed:
+      return "关闭";
+    default:
+      return "未知";
+  }
 }

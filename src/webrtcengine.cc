@@ -29,6 +29,8 @@
 #include "pc/video_track_source.h"
 #include "rtc_base/checks.h"
 #include "rtc_base/logging.h"
+#include "rtc_base/ref_counted_object.h"
+#include "api/stats/rtc_stats_collector_callback.h"
 #include "system_wrappers/include/clock.h"
 #include "test/frame_generator.h"
 #include "test/frame_generator_capturer.h"
@@ -208,6 +210,23 @@ class WebRTCEngine::CreateSessionDescriptionObserverImpl : public webrtc::Create
  private:
   WebRTCEngine* engine_;
   bool is_offer_;
+};
+
+class WebRTCEngine::StatsCollectorCallback : public webrtc::RTCStatsCollectorCallback {
+ public:
+  explicit StatsCollectorCallback(
+      std::function<void(const webrtc::scoped_refptr<const webrtc::RTCStatsReport>&)> callback)
+      : callback_(std::move(callback)) {}
+
+  void OnStatsDelivered(
+      const webrtc::scoped_refptr<const webrtc::RTCStatsReport>& report) override {
+    if (callback_) {
+      callback_(report);
+    }
+  }
+
+ private:
+  std::function<void(const webrtc::scoped_refptr<const webrtc::RTCStatsReport>&)> callback_;
 };
 
 // ============================================================================
@@ -561,6 +580,17 @@ bool WebRTCEngine::IsConnected() const {
   auto state = peer_connection_->ice_connection_state();
   return state == webrtc::PeerConnectionInterface::kIceConnectionConnected ||
          state == webrtc::PeerConnectionInterface::kIceConnectionCompleted;
+}
+
+void WebRTCEngine::CollectStats(
+    std::function<void(const webrtc::scoped_refptr<const webrtc::RTCStatsReport>&)> callback) {
+  if (!peer_connection_) {
+    if (callback) {
+      callback(nullptr);
+    }
+    return;
+  }
+  peer_connection_->GetStats(new webrtc::RefCountedObject<StatsCollectorCallback>(std::move(callback)));
 }
 
 void WebRTCEngine::Shutdown() {

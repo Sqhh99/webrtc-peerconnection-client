@@ -6,11 +6,11 @@
 #include <QMessageBox>
 #include <QCloseEvent>
 #include <QDateTime>
-#include <QInputDialog>
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QMetaObject>
-#include <QGraphicsDropShadowEffect>
+#include <QGridLayout>
+#include <cmath>
 
 VideoCallWindow::VideoCallWindow(ICallController* controller, QWidget* parent)
     : QMainWindow(parent),
@@ -22,85 +22,67 @@ VideoCallWindow::VideoCallWindow(ICallController* controller, QWidget* parent)
   // 设置全局样式
   setStyleSheet(R"(
     QMainWindow {
-      background-color: #f5f7fa;
+      background-color: #eef1f5;
     }
     QWidget {
-      font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
-      font-size: 13px;
+      font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
+      font-size: 12px;
+      color: #2d3748;
     }
     QGroupBox {
-      background-color: white;
-      border: 1px solid #e4e7ed;
-      border-radius: 6px;
-      margin-top: 12px;
-      padding-top: 10px;
-      font-weight: bold;
-      color: #303133;
+      background-color: #ffffff;
+      border: 1px solid #d9dde3;
+      border-radius: 4px;
+      margin-top: 10px;
+      padding-top: 8px;
+      font-weight: 600;
     }
     QGroupBox::title {
       subcontrol-origin: margin;
       subcontrol-position: top left;
-      left: 15px;
-      padding: 0 5px;
-      background-color: white;
+      left: 12px;
+      padding: 0 4px;
+      color: #1a202c;
+      background-color: #ffffff;
     }
     QPushButton {
-      background-color: #409eff;
-      color: white;
+      background-color: #2b6cb0;
+      color: #ffffff;
       border: none;
-      border-radius: 4px;
-      padding: 8px 16px;
-      font-weight: 500;
-      min-height: 32px;
-    }
-    QPushButton:hover {
-      background-color: #66b1ff;
-    }
-    QPushButton:pressed {
-      background-color: #3a8ee6;
+      border-radius: 3px;
+      padding: 6px 14px;
     }
     QPushButton:disabled {
-      background-color: #c0c4cc;
-      color: #909399;
+      background-color: #cbd5e0;
+      color: #718096;
     }
-    QLineEdit {
-      background-color: white;
-      border: 1px solid #dcdfe6;
-      border-radius: 4px;
-      padding: 6px 12px;
-      color: #606266;
+    QPushButton#connectButton {
+      background-color: #2f855a;
     }
-    QLineEdit:focus {
-      border-color: #409eff;
+    QPushButton#disconnectButton {
+      background-color: #4a5568;
     }
-    QListWidget {
-      background-color: white;
-      border: 1px solid #e4e7ed;
-      border-radius: 4px;
-      padding: 4px;
-      outline: none;
+    QPushButton#hangupButton {
+      background-color: #c53030;
+    }
+    QLineEdit, QListWidget, QTextEdit {
+      background-color: #ffffff;
+      border: 1px solid #d9dde3;
+      border-radius: 3px;
+      padding: 6px;
     }
     QListWidget::item {
-      padding: 8px 12px;
-      border-radius: 4px;
-      color: #606266;
-    }
-    QListWidget::item:hover {
-      background-color: #f5f7fa;
+      padding: 6px 10px;
     }
     QListWidget::item:selected {
-      background-color: #ecf5ff;
-      color: #409eff;
+      background-color: #edf2f7;
+      color: #1a202c;
     }
     QTextEdit {
-      background-color: white;
-      border: 1px solid #e4e7ed;
-      border-radius: 4px;
       padding: 8px;
-      color: #606266;
     }
     QLabel {
-      color: #606266;
+      border: none;
     }
   )");
   
@@ -131,20 +113,14 @@ void VideoCallWindow::OnStartLocalRenderer(webrtc::VideoTrackInterface* track) {
   QMetaObject::invokeMethod(this, [this, track]() {
     if (!local_renderer_) {
       local_renderer_ = std::make_unique<VideoRenderer>(video_panel_);
-      local_renderer_->setFixedSize(240, 180);
+      local_renderer_->setFixedSize(220, 160);
       local_renderer_->setStyleSheet(R"(
         QLabel {
-          border: 3px solid white;
-          border-radius: 8px;
-          background-color: #2c3e50;
+          border: 2px solid rgba(255, 255, 255, 0.8);
+          border-radius: 6px;
+          background-color: #1a202c;
         }
       )");
-      // 添加阴影效果
-      QGraphicsDropShadowEffect* shadow = new QGraphicsDropShadowEffect();
-      shadow->setBlurRadius(15);
-      shadow->setColor(QColor(0, 0, 0, 120));
-      shadow->setOffset(0, 4);
-      local_renderer_->setGraphicsEffect(shadow);
       local_renderer_->raise();
     }
     local_renderer_->SetVideoTrack(track);
@@ -178,7 +154,7 @@ void VideoCallWindow::OnStopRemoteRenderer() {
       remote_renderer_->Stop();
       remote_renderer_->hide();
       call_status_label_->show();
-      call_status_label_->setText("等待视频连接...");
+      call_status_label_->setText("等待远端视频...");
     }
   }, Qt::QueuedConnection);
 }
@@ -207,16 +183,8 @@ void VideoCallWindow::OnSignalConnected(const std::string& client_id) {
     is_connected_ = true;
     client_id_edit_->setText(qclient_id);
     
-    connection_status_label_->setText(QString("● 已连接 [%1]").arg(qclient_id));
-    connection_status_label_->setStyleSheet(R"(
-      QLabel { 
-        color: #67c23a; 
-        font-weight: 600;
-        font-size: 14px;
-        border: none;
-        padding: 0 10px;
-      }
-    )");
+    connection_status_label_->setText(QString("已连接 [%1]").arg(qclient_id));
+    connection_status_label_->setStyleSheet("color: #2f855a; font-weight: 600;");
     
     connect_button_->setEnabled(false);
     disconnect_button_->setEnabled(true);
@@ -231,16 +199,8 @@ void VideoCallWindow::OnSignalDisconnected() {
   QMetaObject::invokeMethod(this, [this]() {
     is_connected_ = false;
     
-    connection_status_label_->setText("● 未连接");
-    connection_status_label_->setStyleSheet(R"(
-      QLabel { 
-        color: #f56c6c; 
-        font-weight: 600;
-        font-size: 14px;
-        border: none;
-        padding: 0 10px;
-      }
-    )");
+    connection_status_label_->setText("未连接");
+    connection_status_label_->setStyleSheet("color: #c53030; font-weight: 600;");
     
     connect_button_->setEnabled(true);
     disconnect_button_->setEnabled(false);
@@ -298,7 +258,7 @@ void VideoCallWindow::OnCallStateChanged(CallState state, const std::string& pee
       }
     } else if (state == CallState::Idle) {
       call_status_label_->show();
-      call_status_label_->setText("等待视频连接...");
+      call_status_label_->setText("等待远端视频...");
       if (remote_renderer_) {
         remote_renderer_->hide();
       }
@@ -342,8 +302,8 @@ void VideoCallWindow::CreateUI() {
   setCentralWidget(central_widget);
   
   QVBoxLayout* main_layout = new QVBoxLayout(central_widget);
-  main_layout->setContentsMargins(10, 10, 10, 10);
-  main_layout->setSpacing(10);
+  main_layout->setContentsMargins(12, 12, 12, 12);
+  main_layout->setSpacing(12);
   
   // 创建连接面板（顶部）
   CreateConnectionPanel();
@@ -351,12 +311,8 @@ void VideoCallWindow::CreateUI() {
   
   // 创建主分割器（左右布局）
   main_splitter_ = new QSplitter(Qt::Horizontal, this);
-  main_splitter_->setHandleWidth(1);
-  main_splitter_->setStyleSheet(R"(
-    QSplitter::handle {
-      background-color: #e4e7ed;
-    }
-  )");
+  main_splitter_->setHandleWidth(4);
+  main_splitter_->setStyleSheet("QSplitter::handle { background-color: #cbd5e0; }");
   
   // 左侧：用户列表
   CreateUserListPanel();
@@ -364,27 +320,30 @@ void VideoCallWindow::CreateUI() {
   
   // 右侧：视频和日志的垂直分割
   right_splitter_ = new QSplitter(Qt::Vertical, this);
-  right_splitter_->setHandleWidth(1);
-  right_splitter_->setStyleSheet(R"(
-    QSplitter::handle {
-      background-color: #e4e7ed;
-    }
-  )");
+  right_splitter_->setHandleWidth(4);
+  right_splitter_->setStyleSheet("QSplitter::handle { background-color: #cbd5e0; }");
   
   // 视频面板
   CreateVideoPanel();
   right_splitter_->addWidget(video_panel_);
   
-  // 日志面板
+  // 统计与日志面板
+  CreateStatsPanel();
   CreateLogPanel();
-  right_splitter_->addWidget(log_group_);
+  lower_panel_ = new QWidget(this);
+  QVBoxLayout* lower_layout = new QVBoxLayout(lower_panel_);
+  lower_layout->setContentsMargins(0, 0, 0, 0);
+  lower_layout->setSpacing(8);
+  lower_layout->addWidget(stats_group_);
+  lower_layout->addWidget(log_group_);
+  right_splitter_->addWidget(lower_panel_);
   
-  right_splitter_->setStretchFactor(0, 3);  // 视频占3份
-  right_splitter_->setStretchFactor(1, 1);  // 日志占1份
+  right_splitter_->setStretchFactor(0, 3);
+  right_splitter_->setStretchFactor(1, 2);
   
   main_splitter_->addWidget(right_splitter_);
-  main_splitter_->setStretchFactor(0, 1);  // 用户列表占1份
-  main_splitter_->setStretchFactor(1, 4);  // 右侧占4份
+  main_splitter_->setStretchFactor(0, 1);
+  main_splitter_->setStretchFactor(1, 4);
   
   main_layout->addWidget(main_splitter_);
   
@@ -395,122 +354,42 @@ void VideoCallWindow::CreateUI() {
 
 void VideoCallWindow::CreateConnectionPanel() {
   connection_panel_ = new QWidget(this);
-  connection_panel_->setStyleSheet(R"(
-    QWidget {
-      background-color: white;
-      border-radius: 6px;
-      border: 1px solid #e4e7ed;
-    }
-  )");
+  connection_panel_->setStyleSheet("background-color: #ffffff; border: 1px solid #d9dde3; border-radius: 4px;");
   
   QHBoxLayout* layout = new QHBoxLayout(connection_panel_);
-  layout->setContentsMargins(15, 12, 15, 12);
-  layout->setSpacing(12);
+  layout->setContentsMargins(12, 10, 12, 10);
+  layout->setSpacing(10);
   
-  QLabel* server_label = new QLabel("信令服务器:");
-  server_label->setStyleSheet("QLabel { color: #606266; font-weight: 500; border: none; }");
+  QLabel* server_label = new QLabel("信令服务器:", connection_panel_);
   layout->addWidget(server_label);
   
-  server_url_edit_ = new QLineEdit("ws://localhost:8081/ws/webrtc");
-  server_url_edit_->setMinimumWidth(280);
-  server_url_edit_->setStyleSheet(R"(
-    QLineEdit {
-      background-color: #f5f7fa;
-      border: 1px solid #dcdfe6;
-      border-radius: 4px;
-      padding: 8px 12px;
-      color: #303133;
-    }
-    QLineEdit:focus {
-      border-color: #409eff;
-      background-color: white;
-    }
-  )");
+  server_url_edit_ = new QLineEdit("ws://localhost:8081/ws/webrtc", connection_panel_);
+  server_url_edit_->setMinimumWidth(260);
   layout->addWidget(server_url_edit_);
   
-  QLabel* id_label = new QLabel("客户端ID:");
-  id_label->setStyleSheet("QLabel { color: #606266; font-weight: 500; border: none; }");
+  QLabel* id_label = new QLabel("客户端ID:", connection_panel_);
   layout->addWidget(id_label);
   
-  client_id_edit_ = new QLineEdit();
+  client_id_edit_ = new QLineEdit(connection_panel_);
   client_id_edit_->setPlaceholderText("自动生成");
-  client_id_edit_->setMaximumWidth(150);
-  client_id_edit_->setStyleSheet(R"(
-    QLineEdit {
-      background-color: #f5f7fa;
-      border: 1px solid #dcdfe6;
-      border-radius: 4px;
-      padding: 8px 12px;
-      color: #303133;
-    }
-    QLineEdit:focus {
-      border-color: #409eff;
-      background-color: white;
-    }
-  )");
+  client_id_edit_->setMaximumWidth(140);
   layout->addWidget(client_id_edit_);
   
-  connect_button_ = new QPushButton("连接");
-  connect_button_->setMaximumWidth(90);
-  connect_button_->setStyleSheet(R"(
-    QPushButton {
-      background-color: #67c23a;
-      color: white;
-      border: none;
-      border-radius: 4px;
-      padding: 8px 20px;
-      font-weight: 600;
-      min-height: 36px;
-    }
-    QPushButton:hover {
-      background-color: #85ce61;
-    }
-    QPushButton:pressed {
-      background-color: #5daf34;
-    }
-    QPushButton:disabled {
-      background-color: #c0c4cc;
-    }
-  )");
+  connect_button_ = new QPushButton("连接", connection_panel_);
+  connect_button_->setObjectName("connectButton");
+  connect_button_->setFixedWidth(90);
   connect(connect_button_, &QPushButton::clicked, this, &VideoCallWindow::OnConnectClicked);
   layout->addWidget(connect_button_);
   
-  disconnect_button_ = new QPushButton("断开");
-  disconnect_button_->setMaximumWidth(90);
+  disconnect_button_ = new QPushButton("断开", connection_panel_);
+  disconnect_button_->setObjectName("disconnectButton");
+  disconnect_button_->setFixedWidth(90);
   disconnect_button_->setEnabled(false);
-  disconnect_button_->setStyleSheet(R"(
-    QPushButton {
-      background-color: #909399;
-      color: white;
-      border: none;
-      border-radius: 4px;
-      padding: 8px 20px;
-      font-weight: 600;
-      min-height: 36px;
-    }
-    QPushButton:hover {
-      background-color: #a6a9ad;
-    }
-    QPushButton:pressed {
-      background-color: #82848a;
-    }
-    QPushButton:disabled {
-      background-color: #c0c4cc;
-    }
-  )");
   connect(disconnect_button_, &QPushButton::clicked, this, &VideoCallWindow::OnDisconnectClicked);
   layout->addWidget(disconnect_button_);
   
-  connection_status_label_ = new QLabel("● 未连接");
-  connection_status_label_->setStyleSheet(R"(
-    QLabel { 
-      color: #f56c6c; 
-      font-weight: 600;
-      font-size: 14px;
-      border: none;
-      padding: 0 10px;
-    }
-  )");
+  connection_status_label_ = new QLabel("未连接", connection_panel_);
+  connection_status_label_->setStyleSheet("color: #c53030; font-weight: 600;");
   layout->addWidget(connection_status_label_);
   
   layout->addStretch();
@@ -518,149 +397,42 @@ void VideoCallWindow::CreateConnectionPanel() {
 
 void VideoCallWindow::CreateUserListPanel() {
   user_list_group_ = new QGroupBox("在线用户", this);
-  user_list_group_->setStyleSheet(R"(
-    QGroupBox {
-      background-color: white;
-      border: 1px solid #e4e7ed;
-      border-radius: 6px;
-      margin-top: 12px;
-      padding-top: 15px;
-      font-weight: 600;
-      color: #303133;
-      font-size: 14px;
-    }
-    QGroupBox::title {
-      subcontrol-origin: margin;
-      subcontrol-position: top left;
-      left: 15px;
-      padding: 0 8px;
-      background-color: white;
-    }
-  )");
-  
   QVBoxLayout* layout = new QVBoxLayout(user_list_group_);
-  layout->setContentsMargins(10, 20, 10, 10);
-  layout->setSpacing(8);
-  
-  user_list_ = new QListWidget();
+  layout->setContentsMargins(10, 14, 10, 10);
+  layout->setSpacing(6);
+
+  user_list_ = new QListWidget(user_list_group_);
   user_list_->setSelectionMode(QAbstractItemView::SingleSelection);
-  user_list_->setStyleSheet(R"(
-    QListWidget {
-      background-color: #fafafa;
-      border: 1px solid #e4e7ed;
-      border-radius: 4px;
-      padding: 6px;
-      outline: none;
-    }
-    QListWidget::item {
-      padding: 12px 15px;
-      border-radius: 4px;
-      color: #303133;
-      margin: 2px 0;
-    }
-    QListWidget::item:hover {
-      background-color: #f0f9ff;
-      color: #409eff;
-    }
-    QListWidget::item:selected {
-      background-color: #ecf5ff;
-      color: #409eff;
-      font-weight: 600;
-    }
-  )");
   connect(user_list_, &QListWidget::itemDoubleClicked,
           this, &VideoCallWindow::OnUserItemDoubleClicked);
   layout->addWidget(user_list_);
-  
-  QLabel* hint_label = new QLabel("💡 双击用户发起通话");
-  hint_label->setStyleSheet(R"(
-    QLabel { 
-      color: #909399; 
-      font-size: 12px; 
-      padding: 5px 0;
-      border: none;
-    }
-  )");
+
+  QLabel* hint_label = new QLabel("双击用户即可发起呼叫", user_list_group_);
+  hint_label->setStyleSheet("color: #718096; font-size: 11px;");
   layout->addWidget(hint_label);
 }
 
 void VideoCallWindow::CreateLogPanel() {
   log_group_ = new QGroupBox("系统日志", this);
-  log_group_->setStyleSheet(R"(
-    QGroupBox {
-      background-color: white;
-      border: 1px solid #e4e7ed;
-      border-radius: 6px;
-      margin-top: 12px;
-      padding-top: 15px;
-      font-weight: 600;
-      color: #303133;
-      font-size: 14px;
-    }
-    QGroupBox::title {
-      subcontrol-origin: margin;
-      subcontrol-position: top left;
-      left: 15px;
-      padding: 0 8px;
-      background-color: white;
-    }
-  )");
-  
   QVBoxLayout* layout = new QVBoxLayout(log_group_);
-  layout->setContentsMargins(10, 20, 10, 10);
-  layout->setSpacing(8);
+  layout->setContentsMargins(10, 14, 10, 10);
+  layout->setSpacing(6);
   
-  log_text_ = new QTextEdit();
+  log_text_ = new QTextEdit(log_group_);
   log_text_->setReadOnly(true);
-  log_text_->setMaximumHeight(150);
-  log_text_->setStyleSheet(R"(
-    QTextEdit {
-      background-color: #fafafa;
-      border: 1px solid #e4e7ed;
-      border-radius: 4px;
-      padding: 10px;
-      color: #606266;
-      font-family: "Consolas", "Monaco", monospace;
-      font-size: 12px;
-    }
-  )");
+  log_text_->setMaximumHeight(170);
   layout->addWidget(log_text_);
   
-  QPushButton* clear_log_btn = new QPushButton("🗑 清空日志");
-  clear_log_btn->setMaximumWidth(120);
-  clear_log_btn->setStyleSheet(R"(
-    QPushButton {
-      background-color: #f5f7fa;
-      color: #606266;
-      border: 1px solid #dcdfe6;
-      border-radius: 4px;
-      padding: 6px 12px;
-      font-weight: 500;
-      min-height: 30px;
-    }
-    QPushButton:hover {
-      background-color: #ecf5ff;
-      color: #409eff;
-      border-color: #c6e2ff;
-    }
-    QPushButton:pressed {
-      background-color: #e0eeff;
-    }
-  )");
+  QPushButton* clear_log_btn = new QPushButton("清空日志", log_group_);
+  clear_log_btn->setFixedWidth(100);
   connect(clear_log_btn, &QPushButton::clicked, log_text_, &QTextEdit::clear);
-  layout->addWidget(clear_log_btn);
+  layout->addWidget(clear_log_btn, 0, Qt::AlignRight);
 }
 
 void VideoCallWindow::CreateVideoPanel() {
   video_panel_ = new QWidget(this);
-  video_panel_->setStyleSheet(R"(
-    QWidget { 
-      background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                                  stop:0 #2c3e50, stop:1 #34495e);
-      border-radius: 6px;
-    }
-  )");
-  video_panel_->setMinimumHeight(400);
+  video_panel_->setStyleSheet("background-color: #1a202c; border-radius: 4px;");
+  video_panel_->setMinimumHeight(420);
   
   QVBoxLayout* layout = new QVBoxLayout(video_panel_);
   layout->setContentsMargins(0, 0, 0, 0);
@@ -669,105 +441,79 @@ void VideoCallWindow::CreateVideoPanel() {
   // 远程视频（主视频）
   remote_renderer_ = std::make_unique<VideoRenderer>(video_panel_);
   remote_renderer_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-  remote_renderer_->setStyleSheet("QLabel { border-radius: 6px; }");
+  remote_renderer_->setStyleSheet("QLabel { background-color: #1a202c; border-radius: 4px; }");
   layout->addWidget(remote_renderer_.get());
   remote_renderer_->hide();
   
   // 无视频提示标签
-  call_status_label_ = new QLabel("📹 等待视频连接...", video_panel_);
+  call_status_label_ = new QLabel("等待远端视频...", video_panel_);
   call_status_label_->setAlignment(Qt::AlignCenter);
-  call_status_label_->setStyleSheet(R"(
-    QLabel { 
-      color: #ecf0f1; 
-      font-size: 20px;
-      font-weight: 500;
-      background: transparent;
-      border: none;
-    }
-  )");
+  call_status_label_->setStyleSheet("color: #a0aec0; font-size: 16px;");
   layout->addWidget(call_status_label_);
+}
+
+void VideoCallWindow::CreateStatsPanel() {
+  stats_group_ = new QGroupBox("WebRTC 实时数据", this);
+  QGridLayout* layout = new QGridLayout(stats_group_);
+  layout->setContentsMargins(10, 14, 10, 10);
+  layout->setHorizontalSpacing(12);
+  layout->setVerticalSpacing(6);
+
+  auto add_row = [layout, this](int row, const QString& label_text, QLabel** value_label) {
+    QLabel* label = new QLabel(label_text, stats_group_);
+    QLabel* value = new QLabel("—", stats_group_);
+    value->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    layout->addWidget(label, row, 0);
+    layout->addWidget(value, row, 1);
+    *value_label = value;
+  };
+
+  int row = 0;
+  add_row(row++, "更新时间", &stats_timestamp_value_);
+  add_row(row++, "ICE 状态", &stats_ice_state_value_);
+  add_row(row++, "上行码率", &stats_outbound_bitrate_value_);
+  add_row(row++, "下行码率", &stats_inbound_bitrate_value_);
+  add_row(row++, "往返时延", &stats_rtt_value_);
+  add_row(row++, "音频抖动", &stats_audio_jitter_value_);
+  add_row(row++, "音频丢包率", &stats_audio_loss_value_);
+  add_row(row++, "视频丢包率", &stats_video_loss_value_);
+  add_row(row++, "视频帧率", &stats_video_fps_value_);
+  add_row(row++, "视频分辨率", &stats_video_resolution_value_);
+
+  layout->setColumnStretch(0, 0);
+  layout->setColumnStretch(1, 1);
+
+  if (stats_ice_state_value_) {
+    stats_ice_state_value_->setText("未连接");
+  }
 }
 
 void VideoCallWindow::CreateControlPanel() {
   control_panel_ = new QWidget(this);
-  control_panel_->setStyleSheet(R"(
-    QWidget {
-      background-color: white;
-      border-radius: 6px;
-      border: 1px solid #e4e7ed;
-    }
-  )");
+  control_panel_->setStyleSheet("background-color: #ffffff; border: 1px solid #d9dde3; border-radius: 4px;");
   
   QHBoxLayout* layout = new QHBoxLayout(control_panel_);
-  layout->setContentsMargins(15, 12, 15, 12);
-  layout->setSpacing(12);
+  layout->setContentsMargins(12, 10, 12, 10);
+  layout->setSpacing(10);
   
-  call_button_ = new QPushButton("📞 呼叫");
+  call_button_ = new QPushButton("呼叫", control_panel_);
+  call_button_->setObjectName("callButton");
   call_button_->setEnabled(false);
-  call_button_->setMinimumHeight(45);
-  call_button_->setMinimumWidth(120);
-  call_button_->setStyleSheet(R"(
-    QPushButton { 
-      font-size: 15px; 
-      font-weight: 600;
-      background-color: #67c23a;
-      color: white;
-      border: none;
-      border-radius: 6px;
-      padding: 10px 24px;
-    }
-    QPushButton:hover {
-      background-color: #85ce61;
-    }
-    QPushButton:pressed {
-      background-color: #5daf34;
-    }
-    QPushButton:disabled {
-      background-color: #e4e7ed;
-      color: #c0c4cc;
-    }
-  )");
+  call_button_->setMinimumHeight(40);
+  call_button_->setFixedWidth(110);
   connect(call_button_, &QPushButton::clicked, this, &VideoCallWindow::OnCallButtonClicked);
   layout->addWidget(call_button_);
   
-  hangup_button_ = new QPushButton("📵 挂断");
+  hangup_button_ = new QPushButton("挂断", control_panel_);
+  hangup_button_->setObjectName("hangupButton");
   hangup_button_->setEnabled(false);
-  hangup_button_->setMinimumHeight(45);
-  hangup_button_->setMinimumWidth(120);
-  hangup_button_->setStyleSheet(R"(
-    QPushButton { 
-      font-size: 15px; 
-      font-weight: 600; 
-      background-color: #f56c6c; 
-      color: white;
-      border: none;
-      border-radius: 6px;
-      padding: 10px 24px;
-    }
-    QPushButton:hover {
-      background-color: #f78989;
-    }
-    QPushButton:pressed {
-      background-color: #dd6161;
-    }
-    QPushButton:disabled {
-      background-color: #e4e7ed;
-      color: #c0c4cc;
-    }
-  )");
+  hangup_button_->setMinimumHeight(40);
+  hangup_button_->setFixedWidth(110);
   connect(hangup_button_, &QPushButton::clicked, this, &VideoCallWindow::OnHangupButtonClicked);
   layout->addWidget(hangup_button_);
   
-  call_info_label_ = new QLabel("⚪ 空闲");
-  call_info_label_->setStyleSheet(R"(
-    QLabel { 
-      font-size: 15px; 
-      font-weight: 600;
-      color: #909399;
-      border: none;
-      padding: 0 15px;
-    }
-  )");
+  call_info_label_ = new QLabel("空闲", control_panel_);
+  call_info_label_->setStyleSheet("font-weight: 600; color: #4a5568; padding-left: 12px;");
   layout->addWidget(call_info_label_);
   
   layout->addStretch();
@@ -825,12 +571,15 @@ void VideoCallWindow::OnHangupButtonClicked() {
 }
 
 void VideoCallWindow::OnUpdateStatsTimer() {
+  RtcStatsSnapshot stats = controller_->GetLatestRtcStats();
   if (controller_->IsInCall()) {
     CallState state = controller_->GetCallState();
     call_info_label_->setText(GetCallStateString(state));
   } else {
-    call_info_label_->setText("空闲");
+    call_info_label_->setText(GetCallStateString(CallState::Idle));
+    stats.valid = false;
   }
+  UpdateStatsUI(stats);
 }
 
 // ============================================================================
@@ -853,46 +602,121 @@ void VideoCallWindow::UpdateCallButtonState() {
 
 QString VideoCallWindow::GetCallStateString(CallState state) const {
   switch (state) {
-    case CallState::Idle: return "⚪ 空闲";
-    case CallState::Calling: return "📞 呼叫中...";
-    case CallState::Receiving: return "📲 来电中...";
-    case CallState::Connecting: return "🔄 连接中...";
-    case CallState::Connected: return "🟢 通话中";
-    case CallState::Ending: return "📵 结束中...";
-    default: return "❓ 未知";
+    case CallState::Idle: return "空闲";
+    case CallState::Calling: return "呼叫中...";
+    case CallState::Receiving: return "来电中...";
+    case CallState::Connecting: return "建立连接...";
+    case CallState::Connected: return "通话中";
+    case CallState::Ending: return "结束中...";
+    default: return "未知状态";
   }
 }
 
 void VideoCallWindow::AppendLogInternal(const QString& message, const QString& level) {
-  QString timestamp = QDateTime::currentDateTime().toString("hh:mm:ss");
-  QString color;
-  QString icon;
-  
+  const QString timestamp = QDateTime::currentDateTime().toString("HH:mm:ss");
+  QString level_text = "INFO";
   if (level == "error") {
-    color = "#f56c6c";
-    icon = "❌";
+    level_text = "ERROR";
   } else if (level == "warning") {
-    color = "#e6a23c";
-    icon = "⚠️";
+    level_text = "WARN";
   } else if (level == "success") {
-    color = "#67c23a";
-    icon = "✅";
-  } else {
-    color = "#409eff";
-    icon = "ℹ️";
+    level_text = "OK";
   }
-  
-  QString html = QString("<span style='color: #909399; font-weight: 600;'>[%1]</span> "
-                        "<span style='color: %2; font-weight: 600;'>%3</span> "
-                        "<span style='color: #606266;'>%4</span>")
-                 .arg(timestamp, color, icon, message);
-  
-  log_text_->append(html);
-  
-  // 自动滚动到底部
+
+  log_text_->append(QString("[%1] [%2] %3").arg(timestamp, level_text, message));
+
   QTextCursor cursor = log_text_->textCursor();
   cursor.movePosition(QTextCursor::End);
   log_text_->setTextCursor(cursor);
+}
+
+void VideoCallWindow::UpdateStatsUI(const RtcStatsSnapshot& stats) {
+  if (!stats_group_) {
+    return;
+  }
+
+  auto set_value = [](QLabel* label, const QString& text) {
+    if (label) {
+      label->setText(text);
+    }
+  };
+
+  QString ice_text = QString::fromStdString(stats.ice_state);
+  if (ice_text.isEmpty()) {
+    ice_text = "—";
+  }
+  set_value(stats_ice_state_value_, ice_text);
+
+  if (!stats.valid) {
+    set_value(stats_timestamp_value_, "—");
+    set_value(stats_outbound_bitrate_value_, "—");
+    set_value(stats_inbound_bitrate_value_, "—");
+    set_value(stats_rtt_value_, "—");
+    set_value(stats_audio_jitter_value_, "—");
+    set_value(stats_audio_loss_value_, "—");
+    set_value(stats_video_loss_value_, "—");
+    set_value(stats_video_fps_value_, "—");
+    set_value(stats_video_resolution_value_, "—");
+    return;
+  }
+
+  set_value(stats_timestamp_value_, FormatTimestamp(stats.timestamp_ms));
+  set_value(stats_outbound_bitrate_value_, FormatBitrate(stats.outbound_bitrate_kbps));
+  set_value(stats_inbound_bitrate_value_, FormatBitrate(stats.inbound_bitrate_kbps));
+  set_value(stats_rtt_value_, FormatDouble(stats.current_rtt_ms, 1) + " ms");
+  set_value(stats_audio_jitter_value_, FormatDouble(stats.inbound_audio_jitter_ms, 1) + " ms");
+  set_value(stats_audio_loss_value_, FormatPercentage(stats.inbound_audio_packet_loss_percent));
+  set_value(stats_video_loss_value_, FormatPercentage(stats.inbound_video_packet_loss_percent));
+  set_value(stats_video_fps_value_, FormatDouble(stats.inbound_video_fps, 1) + " fps");
+  set_value(stats_video_resolution_value_, FormatResolution(stats.inbound_video_width, stats.inbound_video_height));
+}
+
+QString VideoCallWindow::FormatBitrate(double kbps) const {
+  if (!std::isfinite(kbps) || kbps <= 0.0) {
+    return "—";
+  }
+  if (kbps >= 1000.0) {
+    return QString("%1 Mbps").arg(FormatDouble(kbps / 1000.0, 2));
+  }
+  return QString("%1 kbps").arg(FormatDouble(kbps, 1));
+}
+
+QString VideoCallWindow::FormatPercentage(double value) const {
+  if (!std::isfinite(value) || value < 0.0) {
+    return "—";
+  }
+  return QString("%1 %").arg(FormatDouble(value, 2));
+}
+
+QString VideoCallWindow::FormatDouble(double value, int precision) const {
+  if (!std::isfinite(value)) {
+    return "—";
+  }
+  QString text = QString::number(value, 'f', precision);
+  if (precision > 0) {
+    while (text.contains('.') && text.endsWith('0')) {
+      text.chop(1);
+    }
+    if (text.endsWith('.')) {
+      text.chop(1);
+    }
+  }
+  return text;
+}
+
+QString VideoCallWindow::FormatResolution(int width, int height) const {
+  if (width <= 0 || height <= 0) {
+    return "—";
+  }
+  return QString("%1x%2").arg(width).arg(height);
+}
+
+QString VideoCallWindow::FormatTimestamp(uint64_t timestamp_ms) const {
+  if (timestamp_ms == 0) {
+    return "—";
+  }
+  QDateTime dt = QDateTime::fromMSecsSinceEpoch(static_cast<qint64>(timestamp_ms), Qt::UTC).toLocalTime();
+  return dt.toString("HH:mm:ss");
 }
 
 void VideoCallWindow::LayoutLocalVideo() {

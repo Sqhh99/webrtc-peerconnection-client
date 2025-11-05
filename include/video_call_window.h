@@ -86,11 +86,18 @@ class VideoCallWindow : public QMainWindow, public ICallUIObserver {
   void CreateUserListPanel();
   void CreateLogPanel();
   void CreateVideoPanel();
+  void CreateStatsPanel();
   void CreateControlPanel();
   
   void UpdateUIState();
   void UpdateCallButtonState();
   void LayoutLocalVideo();
+  void UpdateStatsUI(const RtcStatsSnapshot& stats);
+  QString FormatBitrate(double kbps) const;
+  QString FormatPercentage(double value) const;
+  QString FormatDouble(double value, int precision) const;
+  QString FormatResolution(int width, int height) const;
+  QString FormatTimestamp(uint64_t timestamp_ms) const;
   
   QString GetCallStateString(CallState state) const;
   void AppendLogInternal(const QString& message, const QString& level);
@@ -121,6 +128,18 @@ class VideoCallWindow : public QMainWindow, public ICallUIObserver {
   QLabel* local_video_label_;
   QLabel* remote_video_label_;
   QLabel* call_status_label_;
+  QWidget* lower_panel_;
+  QGroupBox* stats_group_;
+  QLabel* stats_timestamp_value_;
+  QLabel* stats_ice_state_value_;
+  QLabel* stats_outbound_bitrate_value_;
+  QLabel* stats_inbound_bitrate_value_;
+  QLabel* stats_rtt_value_;
+  QLabel* stats_audio_jitter_value_;
+  QLabel* stats_audio_loss_value_;
+  QLabel* stats_video_loss_value_;
+  QLabel* stats_video_fps_value_;
+  QLabel* stats_video_resolution_value_;
   
   QWidget* control_panel_;
   QPushButton* call_button_;
