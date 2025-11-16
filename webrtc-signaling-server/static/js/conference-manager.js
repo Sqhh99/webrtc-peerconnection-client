@@ -175,16 +175,20 @@ class ConferenceManager {
         });
 
         this.room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
-            const isScreenShare = publication?.source === Track.Source.SCREEN_SHARE;
-            const isScreenShareAudio = publication?.source === Track.Source.SCREEN_SHARE_AUDIO;
+            // 同时支持枚举值和字符串比较
+            const source = publication?.source;
+            const isScreenShare = source === Track.Source.SCREEN_SHARE || source === 'screen_share';
+            const isScreenShareAudio = source === Track.Source.SCREEN_SHARE_AUDIO || source === 'screen_share_audio';
+            
             console.log('🎬 TrackSubscribed 事件触发:', {
                 participant: participant.identity,
                 kind: track.kind,
-                source: publication?.source,
+                source: source,
                 isScreenShare,
                 isScreenShareAudio,
                 trackSid: publication?.trackSid
             });
+            
             if (window.conferenceUI) {
                 window.conferenceUI.onTrackSubscribed(track, participant, {
                     isScreenShare,
@@ -194,9 +198,11 @@ class ConferenceManager {
         });
 
         this.room.on(RoomEvent.TrackUnsubscribed, (track, publication, participant) => {
-            const isScreenShare = publication?.source === Track.Source.SCREEN_SHARE;
-            const isScreenShareAudio = publication?.source === Track.Source.SCREEN_SHARE_AUDIO;
-            console.log('取消订阅:', track.kind, 'from', participant.identity, 'source:', publication?.source);
+            const source = publication?.source;
+            const isScreenShare = source === Track.Source.SCREEN_SHARE || source === 'screen_share';
+            const isScreenShareAudio = source === Track.Source.SCREEN_SHARE_AUDIO || source === 'screen_share_audio';
+            
+            console.log('取消订阅:', track.kind, 'from', participant.identity, 'source:', source, 'isScreenShare:', isScreenShare);
             if (window.conferenceUI) {
                 window.conferenceUI.onTrackUnsubscribed(track, participant, {
                     isScreenShare,
@@ -383,25 +389,34 @@ class ConferenceManager {
                     await this.room.localParticipant.setCameraEnabled(true);
                 }
                 
-                // 等待一下让轨道就绪，然后重新附加
-                setTimeout(() => {
-                    const cameraTrack = this.findLocalCameraTrack();
-                    if (cameraTrack) {
-                        console.log('  → 找到摄像头轨道，恢复显示');
-                        window.conferenceUI?.attachLocalVideo(cameraTrack);
-                    } else {
-                        console.warn('  ⚠️ 未找到摄像头轨道，尝试重新启用摄像头');
-                        // 如果还是找不到，强制重新启用摄像头
-                        this.room.localParticipant.setCameraEnabled(false).then(() => {
-                            return this.room.localParticipant.setCameraEnabled(true);
-                        }).then((publication) => {
-                            console.log('  → 摄像头重新启用成功');
-                            this.attachLocalCameraTrack(publication);
-                        }).catch(err => {
-                            console.error('  ✗ 摄像头重新启用失败:', err);
-                        });
-                    }
-                }, 200);
+                // 使用重试机制确保摄像头轨道恢复
+                const restoreCamera = (attempt = 1, maxAttempts = 5) => {
+                    setTimeout(() => {
+                        console.log(`  → 第 ${attempt} 次尝试恢复摄像头`);
+                        const cameraTrack = this.findLocalCameraTrack();
+                        
+                        if (cameraTrack) {
+                            console.log('  ✓ 找到摄像头轨道，恢复显示');
+                            window.conferenceUI?.attachLocalVideo(cameraTrack);
+                        } else if (attempt < maxAttempts) {
+                            console.log(`  → 未找到摄像头轨道，${200}ms 后重试`);
+                            restoreCamera(attempt + 1, maxAttempts);
+                        } else {
+                            console.warn('  ⚠️ 多次尝试后仍未找到摄像头轨道，强制重新启用');
+                            // 最后尝试：强制重新启用摄像头
+                            this.room.localParticipant.setCameraEnabled(false).then(() => {
+                                return this.room.localParticipant.setCameraEnabled(true);
+                            }).then((publication) => {
+                                console.log('  ✓ 摄像头强制重新启用成功');
+                                this.attachLocalCameraTrack(publication);
+                            }).catch(err => {
+                                console.error('  ✗ 摄像头强制重新启用失败:', err);
+                            });
+                        }
+                    }, attempt === 1 ? 300 : 200);
+                };
+                
+                restoreCamera();
             } else {
                 console.log('🖥️ 开启屏幕共享');
                 const sharePublication = await this.room.localParticipant.setScreenShareEnabled(true);
@@ -528,8 +543,18 @@ class ConferenceManager {
         }
 
         const localParticipant = this.room?.localParticipant;
-        if (!localParticipant?.videoTracks) {
-            console.log('    [findLocalCameraTrack] localParticipant 或 videoTracks 不存在');
+        if (!localParticipant) {
+            console.log('    [findLocalCameraTrack] localParticipant 不存在');
+            return null;
+        }
+        
+        if (!localParticipant.videoTracks) {
+            console.log('    [findLocalCameraTrack] videoTracks 不存在');
+            return null;
+        }
+        
+        if (localParticipant.videoTracks.size === 0) {
+            console.log('    [findLocalCameraTrack] videoTracks 为空');
             return null;
         }
 

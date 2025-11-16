@@ -618,6 +618,7 @@ class ConferenceUI {
     onTrackSubscribed(track, participant, options = {}) {
         if (!track || !participant) return;
         const isScreenShare = options.isScreenShare;
+        console.log('🎬 onTrackSubscribed:', participant.identity, track.kind, isScreenShare ? '屏幕共享' : '摄像头');
         this.participantNames.set(participant.sid, participant.identity || this.participantNames.get(participant.sid) || '参会者');
 
         if (track.kind === 'video') {
@@ -628,10 +629,18 @@ class ConferenceUI {
             this.ensureParticipantTile(participant);
             this.remoteCameraTracks.set(participant.sid, track);
             this.attachTrackToTile(participant.sid, track);
+            
+            console.log('  → 当前舞台 sid:', this.stageParticipantSid, '是否屏幕共享:', this.stageIsScreenShare);
 
-            if (this.userPinnedSid === participant.sid) {
-                this.setStageTrack(track, participant);
+            // 如果舞台正在显示该参与者，立即更新舞台
+            if (this.stageParticipantSid === participant.sid) {
+                console.log('  → 舞台正在显示该参与者，更新舞台画面');
+                this.setStageTrack(track, participant, { isScreenShare: false });
+            } else if (this.userPinnedSid === participant.sid) {
+                console.log('  → 用户固定了该参与者，更新舞台画面');
+                this.setStageTrack(track, participant, { isScreenShare: false });
             } else {
+                console.log('  → 调用 maybeAutoSelectStage');
                 this.maybeAutoSelectStage('video-subscribed');
             }
         } else if (track.kind === 'audio') {
@@ -858,8 +867,17 @@ class ConferenceUI {
     }
 
     attachScreenShareTrack(track, participant) {
+        console.log('🖥️ attachScreenShareTrack 被调用, participant:', participant.identity);
         this.remoteShareTracks.set(participant.sid, track);
         this.stageForcedByShare = participant.sid;
+        
+        // 更新左侧缩略图显示屏幕共享
+        console.log('  → 更新左侧缩略图显示屏幕共享');
+        this.ensureParticipantTile(participant);
+        this.attachTrackToTile(participant.sid, track);
+        
+        // 更新大舞台显示屏幕共享
+        console.log('  → 更新大舞台显示屏幕共享');
         this.setStageTrack(track, participant, { isScreenShare: true });
         this.updateScreenShareIndicator();
         this.showToast(`${participant.identity} 开始共享屏幕`, 'info');
@@ -867,28 +885,56 @@ class ConferenceUI {
     }
 
     removeScreenShare(participantSid) {
+        console.log('🗑️ removeScreenShare 被调用, participantSid:', participantSid);
+        console.log('  → 当前舞台 sid:', this.stageParticipantSid, '是否屏幕共享:', this.stageIsScreenShare);
+        console.log('  → remoteCameraTracks 中是否有该参与者:', this.remoteCameraTracks.has(participantSid));
+        
         this.remoteShareTracks.delete(participantSid);
         const wasShowingThisShare = this.stageParticipantSid === participantSid && this.stageIsScreenShare;
+        console.log('  → 舞台是否正在显示此屏幕共享:', wasShowingThisShare);
         
         if (this.stageForcedByShare === participantSid) {
             this.stageForcedByShare = null;
+            console.log('  → 清除 stageForcedByShare');
         }
         
         // 如果舞台正在显示这个屏幕共享，尝试切换回该参与者的摄像头
         if (wasShowingThisShare) {
-            const cameraTrack = this.remoteCameraTracks.get(participantSid);
-            if (cameraTrack) {
-                // 切换回该参与者的摄像头
-                this.setStageTrack(cameraTrack, {
-                    sid: participantSid,
-                    identity: this.participantNames.get(participantSid) || '参会者'
-                }, { isScreenShare: false });
-                this.showToast('屏幕共享已结束，切换至摄像头', 'info');
-            } else {
-                // 没有摄像头，选择其他画面
-                this.maybeAutoSelectStage('share-ended');
-                this.showToast('屏幕共享已结束', 'info');
-            }
+            // 添加延迟，等待摄像头轨道就绪
+            const attemptSwitch = (retryCount = 0) => {
+                const cameraTrack = this.remoteCameraTracks.get(participantSid);
+                console.log(`  → [尝试 ${retryCount + 1}/5] 切换到摄像头, 找到轨道:`, !!cameraTrack);
+                
+                if (cameraTrack) {
+                    // 恢复左侧缩略图显示摄像头
+                    console.log('  → 恢复左侧缩略图显示摄像头');
+                    this.attachTrackToTile(participantSid, cameraTrack);
+                    
+                    // 切换回该参与者的摄像头
+                    console.log('  ✓ 切换舞台到摄像头');
+                    this.setStageTrack(cameraTrack, {
+                        sid: participantSid,
+                        identity: this.participantNames.get(participantSid) || '参会者'
+                    }, { isScreenShare: false });
+                    this.showToast('屏幕共享已结束，切换至摄像头', 'info');
+                } else if (retryCount < 5) {
+                    // 最多重试5次，间隔逐渐增加
+                    const delay = 200 + retryCount * 100;
+                    console.log(`  → 未找到摄像头轨道，${delay}ms 后重试`);
+                    setTimeout(() => attemptSwitch(retryCount + 1), delay);
+                } else {
+                    // 重试失败，选择其他画面
+                    console.warn('  ✗ 重试失败，选择其他画面');
+                    this.maybeAutoSelectStage('share-ended');
+                    this.showToast('屏幕共享已结束', 'info');
+                }
+            };
+            
+            // 立即尝试第一次
+            attemptSwitch();
+        } else {
+            console.log('  → 舞台未显示此屏幕共享，无需切换');
+            this.showToast('屏幕共享已结束', 'info');
         }
         
         this.updateScreenShareIndicator();
@@ -904,6 +950,30 @@ class ConferenceUI {
         
         console.log('  → 保存屏幕共享轨道');
         this.localScreenShareTrack = track;
+        
+        // 监听轨道结束事件（浏览器原生的结束共享按钮）
+        console.log('  → 添加 ended 事件监听器');
+        track.once('ended', () => {
+            console.log('🛑 [ended事件] 屏幕共享轨道已结束（浏览器原生按钮）');
+            
+            const manager = window.conferenceManager;
+            if (!manager) {
+                console.warn('  ⚠️ conferenceManager 不存在');
+                return;
+            }
+            
+            // 检查状态，避免重复处理
+            if (!manager.isScreenSharing) {
+                console.log('  → 屏幕共享已经停止，跳过');
+                return;
+            }
+            
+            console.log('  → 调用 toggleScreenShare 停止屏幕共享');
+            // 使用与界面按钮相同的逻辑
+            manager.toggleScreenShare().catch(err => {
+                console.error('  ✗ toggleScreenShare 失败:', err);
+            });
+        });
         
         console.log('  → 更新本地预览为屏幕共享');
         this.setLocalPreviewTrack(track);
