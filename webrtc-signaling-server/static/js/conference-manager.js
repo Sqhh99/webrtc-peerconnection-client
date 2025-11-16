@@ -97,10 +97,7 @@ class ConferenceManager {
 
             if (publication.source === Track.Source.SCREEN_SHARE) {
                 console.log('  → 附加本地屏幕共享');
-                const track = publication.track;
-                if (track) {
-                    window.conferenceUI.onLocalScreenShareStarted(track);
-                }
+                this.attachLocalScreenShareTrack(publication);
             }
         });
 
@@ -315,8 +312,9 @@ class ConferenceManager {
                 await this.room.localParticipant.setScreenShareEnabled(false);
                 this.isScreenSharing = false;
             } else {
-                await this.room.localParticipant.setScreenShareEnabled(true);
+                const sharePublication = await this.room.localParticipant.setScreenShareEnabled(true);
                 this.isScreenSharing = true;
+                this.attachLocalScreenShareTrack(sharePublication);
             }
             return this.isScreenSharing;
         } catch (error) {
@@ -337,6 +335,9 @@ class ConferenceManager {
         
         await this.publishData(data, { reliable: true });
         await this.sendTypingState(false);
+
+        // 本端立即渲染自己的消息（LiveKit 默认不会把 DataReceived 再回送给发送者）
+        window.conferenceUI?.onChatMessage(data, null);
     }
 
     async disconnect() {
@@ -445,6 +446,56 @@ class ConferenceManager {
                 ? pub.source === TrackSource.CAMERA
                 : pub.kind === 'video';
             if (isCameraSource) {
+                return pub.track;
+            }
+        }
+        return null;
+    }
+
+    attachLocalScreenShareTrack(publication) {
+        if (!window.conferenceUI) {
+            return;
+        }
+
+        const track = this.findLocalScreenShareTrack(publication);
+        if (track) {
+            window.conferenceUI.onLocalScreenShareStarted(track);
+            return;
+        }
+
+        setTimeout(() => {
+            const retryTrack = this.findLocalScreenShareTrack();
+            if (retryTrack) {
+                window.conferenceUI.onLocalScreenShareStarted(retryTrack);
+            }
+        }, 300);
+    }
+
+    findLocalScreenShareTrack(publication) {
+        if (publication?.track) {
+            return publication.track;
+        }
+
+        const localParticipant = this.room?.localParticipant;
+        if (!localParticipant?.videoTracks) {
+            return null;
+        }
+
+        const publications = localParticipant.videoTracks instanceof Map
+            ? Array.from(localParticipant.videoTracks.values())
+            : Array.isArray(localParticipant.videoTracks)
+                ? localParticipant.videoTracks
+                : Object.values(localParticipant.videoTracks);
+
+        const TrackSource = window.LivekitClient?.Track?.Source;
+
+        for (const pub of publications) {
+            if (!pub || !pub.track) continue;
+            if (TrackSource) {
+                if (pub.source === TrackSource.SCREEN_SHARE) {
+                    return pub.track;
+                }
+            } else if (pub.kind === 'video' && pub.name?.includes('screen')) {
                 return pub.track;
             }
         }

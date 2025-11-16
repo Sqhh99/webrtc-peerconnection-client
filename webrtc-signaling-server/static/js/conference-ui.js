@@ -11,13 +11,11 @@ class ConferenceUI {
             sidebarParticipantCount: document.getElementById('sidebarParticipantCount'),
             loadingOverlay: document.getElementById('loadingOverlay'),
             loadingText: document.getElementById('loadingText'),
-            participantsSidebar: document.getElementById('participantsSidebar'),
-            chatSidebar: document.getElementById('chatSidebar'),
             participantsList: document.getElementById('participantsList'),
             chatMessages: document.getElementById('chatMessages'),
             chatInput: document.getElementById('chatInput'),
             chatSendBtn: document.getElementById('chatSendBtn'),
-            chatBadge: document.querySelector('#chatBtn .badge'),
+            chatBadge: document.getElementById('chatBtnBadge'),
             connectionStatus: document.getElementById('connectionStatus'),
             networkQuality: document.getElementById('networkQuality'),
             connectionStateText: document.getElementById('connectionStateText'),
@@ -34,11 +32,16 @@ class ConferenceUI {
             resetSpotlightBtn: document.getElementById('resetSpotlightBtn'),
             previewSpotlightBtn: document.getElementById('previewSpotlightBtn'),
             typingIndicator: document.getElementById('typingIndicator'),
-            collapseChatBtn: document.getElementById('collapseChatBtn'),
-            chatSidebarToggle: document.getElementById('chatBtnBottom'),
-            participantsSidebarToggle: document.getElementById('participantsBtnBottom'),
             copyLinkBtn: document.getElementById('copyStageBtn'),
-            stageSurface: document.getElementById('stageSurface')
+            stageSurface: document.getElementById('stageSurface'),
+            utilityPanel: document.getElementById('utilityPanel'),
+            panelParticipants: document.getElementById('panelParticipants'),
+            panelChat: document.getElementById('panelChat'),
+            panelParticipantsTab: document.getElementById('panelParticipantsTab'),
+            panelChatTab: document.getElementById('panelChatTab'),
+            collapseChatBtn: document.getElementById('collapseChatBtn'),
+            participantsButton: document.getElementById('participantsBtn'),
+            chatButton: document.getElementById('chatBtn')
         };
 
         this.remoteParticipants = new Map(); // sid -> tile
@@ -48,6 +51,9 @@ class ConferenceUI {
 
         this.localCameraTrack = null;
         this.localScreenShareTrack = null;
+        this.currentLocalPreviewTrack = null;
+        this.trackSource = window.LivekitClient?.Track?.Source || {};
+        this.screenShareSource = this.trackSource.SCREEN_SHARE || 'screen_share';
         this.stageTrack = null;
         this.stageParticipantSid = null;
         this.stageIsScreenShare = false;
@@ -60,47 +66,34 @@ class ConferenceUI {
         this.typingParticipants = new Map(); // sid -> { name, timeout }
         this.isTyping = false;
         this.typingTimeoutId = null;
+        this.currentPanel = null;
 
-        this.setupSidebarListeners();
+        this.setupPanelControls();
         this.setupChatListeners();
         this.bindStageControls();
         this.setConnectionState('idle');
         this.updateScreenShareIndicator();
         this.updateRailState();
+        this.clearChatUnread();
     }
 
-    setupSidebarListeners() {
-        document.querySelectorAll('.close-sidebar').forEach(btn => {
-            btn.addEventListener('click', () => {
-                this.elements.participantsSidebar?.classList.remove('active');
-                this.elements.chatSidebar?.classList.remove('active');
-            });
-        });
+    setupPanelControls() {
+        const openParticipants = () => this.openUtilityPanel('participants');
+        const openChat = () => this.openUtilityPanel('chat');
 
-        const bindToggle = (button, type) => {
-            if (!button) return;
-            button.addEventListener('click', () => this.toggleSidebar(type));
-        };
+        this.elements.participantsButton?.addEventListener('click', openParticipants);
+        this.elements.panelParticipantsTab?.addEventListener('click', openParticipants);
+        this.elements.chatButton?.addEventListener('click', openChat);
+        this.elements.panelChatTab?.addEventListener('click', openChat);
 
-        bindToggle(document.getElementById('participantsBtn'), 'participants');
-        bindToggle(this.elements.participantsSidebarToggle, 'participants');
-        bindToggle(document.getElementById('chatBtn'), 'chat');
-        bindToggle(this.elements.chatSidebarToggle, 'chat');
+        this.elements.collapseChatBtn?.addEventListener('click', () => this.hideUtilityPanel());
 
         [document.getElementById('shareBtn'), this.elements.copyLinkBtn].forEach(btn => {
-            if (btn) {
-                btn.addEventListener('click', () => this.shareLink());
-            }
+            btn?.addEventListener('click', () => this.shareLink());
         });
     }
 
     bindStageControls() {
-        if (this.elements.collapseChatBtn) {
-            this.elements.collapseChatBtn.addEventListener('click', () => {
-                this.elements.chatSidebar?.classList.toggle('active');
-            });
-        }
-
         if (this.elements.resetSpotlightBtn) {
             this.elements.resetSpotlightBtn.addEventListener('click', () => {
                 this.clearUserSpotlight();
@@ -240,20 +233,37 @@ class ConferenceUI {
         }
     }
 
-    toggleSidebar(type) {
-        if (type === 'participants') {
-            const isActive = this.elements.participantsSidebar?.classList.toggle('active');
-            this.elements.chatSidebar?.classList.remove('active');
-            if (isActive) {
-                this.updateParticipantsList();
-            }
-        } else if (type === 'chat') {
-            const isActive = this.elements.chatSidebar?.classList.toggle('active');
-            this.elements.participantsSidebar?.classList.remove('active');
-            if (isActive) {
-                this.clearChatUnread();
-            }
+    openUtilityPanel(type) {
+        if (!this.elements.utilityPanel) return;
+
+        if (this.isPanelActive(type)) {
+            this.hideUtilityPanel();
+            return;
         }
+
+        this.currentPanel = type;
+        this.elements.utilityPanel.classList.add('active');
+
+        const isChat = type === 'chat';
+        this.elements.panelParticipants?.classList.toggle('active', !isChat);
+        this.elements.panelChat?.classList.toggle('active', isChat);
+        this.elements.panelParticipantsTab?.classList.toggle('active', !isChat);
+        this.elements.panelChatTab?.classList.toggle('active', isChat);
+
+        if (isChat) {
+            this.clearChatUnread();
+        } else {
+            this.updateParticipantsList();
+        }
+    }
+
+    hideUtilityPanel() {
+        this.elements.utilityPanel?.classList.remove('active');
+        this.currentPanel = null;
+    }
+
+    isPanelActive(type) {
+        return this.currentPanel === type && this.elements.utilityPanel?.classList.contains('active');
     }
 
     updateParticipantsList() {
@@ -340,7 +350,7 @@ class ConferenceUI {
         this.elements.chatMessages.appendChild(wrapper);
         this.elements.chatMessages.scrollTop = this.elements.chatMessages.scrollHeight;
 
-        if (!isLocal && !this.elements.chatSidebar?.classList.contains('active')) {
+        if (!isLocal && !this.isPanelActive('chat')) {
             this.incrementChatUnread();
             this.showToast(`${sender}: ${message.message}`, 'info');
         }
@@ -418,6 +428,7 @@ class ConferenceUI {
         this.unreadChatCount = 0;
         if (this.elements.chatBadge) {
             this.elements.chatBadge.style.display = 'none';
+            this.elements.chatBadge.textContent = '';
         }
     }
 
@@ -485,7 +496,7 @@ class ConferenceUI {
         const safeName = roomName || '视频会议';
         document.title = `LiveKit · ${safeName} (${participantCount}人)`;
 
-        if (this.elements.participantsSidebar?.classList.contains('active')) {
+        if (this.isPanelActive('participants')) {
             this.updateParticipantsList();
         }
     }
@@ -509,15 +520,36 @@ class ConferenceUI {
     }
 
     attachLocalVideo(track) {
-        if (this.elements.localVideo && track) {
-            this.localCameraTrack = track;
-            track.attach(this.elements.localVideo);
-            if (this.userPinnedSid === 'local' || this.stageParticipantSid === 'local') {
-                this.setStageTrack(track, {
-                    sid: 'local',
-                    identity: this.elements.localName?.textContent || '我'
-                });
-            }
+        if (!track) return;
+        this.localCameraTrack = track;
+        if (!this.localScreenShareTrack) {
+            this.setLocalPreviewTrack(track);
+        }
+        if (this.userPinnedSid === 'local' || this.stageParticipantSid === 'local') {
+            this.setStageTrack(track, {
+                sid: 'local',
+                identity: this.elements.localName?.textContent || '我'
+            });
+        }
+    }
+
+    setLocalPreviewTrack(track) {
+        if (!this.elements.localVideo || !track) return;
+        if (this.currentLocalPreviewTrack && this.currentLocalPreviewTrack !== track) {
+            this.currentLocalPreviewTrack.detach(this.elements.localVideo);
+        }
+        track.attach(this.elements.localVideo);
+        this.currentLocalPreviewTrack = track;
+    }
+
+    restoreLocalPreview() {
+        if (this.localScreenShareTrack) {
+            this.setLocalPreviewTrack(this.localScreenShareTrack);
+        } else if (this.localCameraTrack) {
+            this.setLocalPreviewTrack(this.localCameraTrack);
+        } else if (this.currentLocalPreviewTrack) {
+            this.currentLocalPreviewTrack.detach(this.elements.localVideo);
+            this.currentLocalPreviewTrack = null;
         }
     }
 
@@ -813,6 +845,7 @@ class ConferenceUI {
     onLocalScreenShareStarted(track) {
         if (!track) return;
         this.localScreenShareTrack = track;
+        this.setLocalPreviewTrack(track);
         this.stageForcedByShare = 'local';
         this.setStageTrack(track, {
             sid: 'local',
@@ -824,9 +857,18 @@ class ConferenceUI {
     }
 
     onLocalScreenShareStopped() {
+        const restoreLocalStage = this.stageParticipantSid === 'local' || this.userPinnedSid === 'local';
         this.localScreenShareTrack = null;
         if (this.stageForcedByShare === 'local') {
             this.stageForcedByShare = null;
+        }
+        this.restoreLocalPreview();
+        if (restoreLocalStage && this.localCameraTrack) {
+            this.setStageTrack(this.localCameraTrack, {
+                sid: 'local',
+                identity: this.elements.localName?.textContent || '我'
+            });
+        } else {
             this.maybeAutoSelectStage('local-share-stop');
         }
         this.updateScreenShareIndicator();
@@ -861,12 +903,28 @@ class ConferenceUI {
         }
 
         let track = this.remoteCameraTracks.get(sid);
+        if (!track) {
+            track = this.getCameraTrackFromRoom(sid);
+            if (track) {
+                this.remoteCameraTracks.set(sid, track);
+            }
+        }
         let isScreenShare = false;
         if (!track && this.remoteShareTracks.has(sid)) {
             track = this.remoteShareTracks.get(sid);
             isScreenShare = true;
         }
-        if (!track) return false;
+        if (!track) {
+            const fallbackVideo = this.getTileVideoElement(sid);
+            if (fallbackVideo && this.attachVideoElementToStage(fallbackVideo)) {
+                const name = this.participantNames.get(sid) || '参会者';
+                this.stageParticipantSid = sid;
+                this.stageIsScreenShare = false;
+                this.updateStageLabel(name, false);
+                return true;
+            }
+            return false;
+        }
 
         const participant = {
             sid,
@@ -955,6 +1013,94 @@ class ConferenceUI {
             return this.remoteShareTracks.keys().next().value;
         }
         return null;
+    }
+
+    getParticipantBySid(sid) {
+        const manager = window.conferenceManager;
+        const room = manager?.room;
+        if (!room) return null;
+
+        if (sid === 'local' || sid === room.localParticipant?.sid) {
+            return room.localParticipant;
+        }
+
+        if (room.remoteParticipants instanceof Map && room.remoteParticipants.has(sid)) {
+            return room.remoteParticipants.get(sid);
+        }
+
+        if (room.remoteParticipants && typeof room.remoteParticipants.forEach === 'function') {
+            let found = null;
+            room.remoteParticipants.forEach((p) => {
+                if (!found && p.sid === sid) {
+                    found = p;
+                }
+            });
+            if (found) return found;
+        }
+
+        if (room.participants instanceof Map && room.participants.has(sid)) {
+            return room.participants.get(sid);
+        }
+
+        if (room.participants && typeof room.participants.forEach === 'function') {
+            let result = null;
+            room.participants.forEach((p) => {
+                if (!result && p.sid === sid) result = p;
+            });
+            return result;
+        }
+
+        return null;
+    }
+
+    getCameraTrackFromRoom(sid) {
+        const participant = this.getParticipantBySid(sid);
+        if (!participant?.videoTracks) return null;
+
+        const publications = participant.videoTracks instanceof Map
+            ? Array.from(participant.videoTracks.values())
+            : Array.isArray(participant.videoTracks)
+                ? participant.videoTracks
+                : Object.values(participant.videoTracks);
+
+        const TrackSource = window.LivekitClient?.Track?.Source;
+
+        for (const pub of publications) {
+            if (!pub || !pub.track) continue;
+            const source = pub.source;
+            const isCamera = TrackSource ? source === TrackSource.CAMERA : source !== this.screenShareSource;
+            if (isCamera || !source) {
+                return pub.track;
+            }
+        }
+        return null;
+    }
+
+    getTileVideoElement(sid) {
+        if (sid === 'local' || sid === this.getLocalParticipantSid()) {
+            return this.elements.localTile?.querySelector('video');
+        }
+        const tile = this.remoteParticipants.get(sid);
+        return tile?.querySelector('video') || null;
+    }
+
+    attachVideoElementToStage(videoElement) {
+        if (!videoElement || !this.elements.stageVideo || !videoElement.srcObject) {
+            return false;
+        }
+
+        try {
+            this.stageTrack?.detach?.(this.elements.stageVideo);
+            this.stageTrack = null;
+            const clonedStream = new MediaStream();
+            videoElement.srcObject.getVideoTracks().forEach(track => clonedStream.addTrack(track));
+            this.elements.stageVideo.srcObject = clonedStream;
+            this.elements.stageVideo.play?.().catch(() => {});
+            return true;
+        } catch (error) {
+            console.warn('无法使用备用方式附加视频到舞台', error);
+            return false;
+        }
     }
 
     showToast(message, type = 'info') {
