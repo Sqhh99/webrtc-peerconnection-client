@@ -374,16 +374,34 @@ class ConferenceManager {
                 console.log('  → 调用 onLocalScreenShareStopped');
                 window.conferenceUI?.onLocalScreenShareStopped();
                 
-                // 恢复摄像头显示
+                // 确保摄像头处于启用状态
+                const isCameraEnabled = this.room.localParticipant.isCameraEnabled;
+                console.log('  → 摄像头状态:', isCameraEnabled);
+                
+                if (!isCameraEnabled) {
+                    console.log('  → 摄像头已禁用，重新启用');
+                    await this.room.localParticipant.setCameraEnabled(true);
+                }
+                
+                // 等待一下让轨道就绪，然后重新附加
                 setTimeout(() => {
                     const cameraTrack = this.findLocalCameraTrack();
                     if (cameraTrack) {
-                        console.log('  → 恢复摄像头显示');
+                        console.log('  → 找到摄像头轨道，恢复显示');
                         window.conferenceUI?.attachLocalVideo(cameraTrack);
                     } else {
-                        console.warn('  ⚠️ 未找到摄像头轨道');
+                        console.warn('  ⚠️ 未找到摄像头轨道，尝试重新启用摄像头');
+                        // 如果还是找不到，强制重新启用摄像头
+                        this.room.localParticipant.setCameraEnabled(false).then(() => {
+                            return this.room.localParticipant.setCameraEnabled(true);
+                        }).then((publication) => {
+                            console.log('  → 摄像头重新启用成功');
+                            this.attachLocalCameraTrack(publication);
+                        }).catch(err => {
+                            console.error('  ✗ 摄像头重新启用失败:', err);
+                        });
                     }
-                }, 100);
+                }, 200);
             } else {
                 console.log('🖥️ 开启屏幕共享');
                 const sharePublication = await this.room.localParticipant.setScreenShareEnabled(true);
@@ -505,13 +523,17 @@ class ConferenceManager {
 
     findLocalCameraTrack(publication) {
         if (publication?.track) {
+            console.log('    [findLocalCameraTrack] 从 publication 参数找到轨道');
             return publication.track;
         }
 
         const localParticipant = this.room?.localParticipant;
         if (!localParticipant?.videoTracks) {
+            console.log('    [findLocalCameraTrack] localParticipant 或 videoTracks 不存在');
             return null;
         }
+
+        console.log('    [findLocalCameraTrack] 本地视频轨道数量:', localParticipant.videoTracks.size);
 
         const publications = localParticipant.videoTracks instanceof Map
             ? Array.from(localParticipant.videoTracks.values())
@@ -523,19 +545,35 @@ class ConferenceManager {
 
         let fallbackTrack = null;
         for (const pub of publications) {
-            if (!pub || !pub.track) continue;
+            if (!pub || !pub.track) {
+                console.log('    [findLocalCameraTrack] 跳过空 publication');
+                continue;
+            }
+            console.log('    [findLocalCameraTrack] 检查轨道:', {
+                source: pub.source,
+                kind: pub.kind,
+                trackSid: pub.trackSid,
+                isMuted: pub.isMuted
+            });
+            
             const source = pub.source ?? pub.kind;
             const isCameraSource = TrackSource
                 ? source === TrackSource.CAMERA || source === undefined
                 : source !== TrackSource?.SCREEN_SHARE;
             if (isCameraSource) {
+                console.log('    [findLocalCameraTrack] ✓ 找到摄像头轨道');
                 return pub.track;
             }
             if (!pub.source && pub.track.kind === 'video') {
                 fallbackTrack = pub.track;
+                console.log('    [findLocalCameraTrack] 保存备用轨道');
             }
         }
-        if (fallbackTrack) return fallbackTrack;
+        if (fallbackTrack) {
+            console.log('    [findLocalCameraTrack] 使用备用轨道');
+            return fallbackTrack;
+        }
+        console.log('    [findLocalCameraTrack] ✗ 未找到任何摄像头轨道');
         return null;
     }
 
