@@ -376,6 +376,10 @@ class ConferenceManager {
                 await this.room.localParticipant.setScreenShareEnabled(false);
                 this.isScreenSharing = false;
                 
+                // 更新按钮状态
+                console.log('  → 更新屏幕共享按钮状态');
+                this.updateScreenShareButtonState(false);
+                
                 // 立即触发 UI 更新
                 console.log('  → 调用 onLocalScreenShareStopped');
                 window.conferenceUI?.onLocalScreenShareStopped();
@@ -446,6 +450,26 @@ class ConferenceManager {
 
         // 本端立即渲染自己的消息（LiveKit 默认不会把 DataReceived 再回送给发送者）
         window.conferenceUI?.onChatMessage(data, null);
+    }
+
+    updateScreenShareButtonState(isSharing) {
+        console.log('🔄 updateScreenShareButtonState 被调用, isSharing:', isSharing);
+        const shareScreenBtn = document.getElementById('shareScreenBtn');
+        if (!shareScreenBtn) {
+            console.warn('  ⚠️ shareScreenBtn 不存在');
+            return;
+        }
+        
+        // 更新按钮状态
+        window.conferenceUI?.updateButtonState('shareScreenBtn', isSharing);
+        
+        // 更新图标
+        const icon = shareScreenBtn.querySelector('i');
+        if (icon) {
+            icon.className = isSharing ? 'bi bi-stop-circle-fill' : 'bi bi-display';
+        }
+        
+        console.log('  ✓ 按钮状态已更新');
     }
 
     async disconnect() {
