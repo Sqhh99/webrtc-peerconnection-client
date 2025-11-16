@@ -10,6 +10,7 @@ class ConferenceManager {
         this.remoteTracks = new Map();
         this.isScreenSharing = false;
         this.connectedAt = null;
+        this.typingState = false;
     }
 
     async initialize() {
@@ -83,20 +84,23 @@ class ConferenceManager {
         // 本地轨道发布事件
         this.room.localParticipant.on(ParticipantEvent.TrackPublished, (publication) => {
             console.log('📢 本地轨道已发布:', publication.kind, publication.source);
-            const track = publication.track;
-            if (!track || !window.conferenceUI) {
-                console.warn('  ⚠️ 轨道或UI不存在');
+            if (!window.conferenceUI) {
+                console.warn('  ⚠️ UI 不存在，无法附加轨道');
                 return;
             }
 
             if (publication.source === Track.Source.CAMERA && publication.kind === 'video') {
                 console.log('  → 附加本地摄像头视频');
-                window.conferenceUI.attachLocalVideo(track);
+                this.attachLocalCameraTrack(publication);
+                return;
             }
 
             if (publication.source === Track.Source.SCREEN_SHARE) {
                 console.log('  → 附加本地屏幕共享');
-                window.conferenceUI.onLocalScreenShareStarted(track);
+                const track = publication.track;
+                if (track) {
+                    window.conferenceUI.onLocalScreenShareStarted(track);
+                }
             }
         });
 
@@ -161,7 +165,11 @@ class ConferenceManager {
             try {
                 const decoder = new TextDecoder();
                 const message = JSON.parse(decoder.decode(payload));
-                if (window.conferenceUI) {
+                if (!window.conferenceUI) return;
+
+                if (message.type === 'typing') {
+                    window.conferenceUI.onTypingEvent(message, participant);
+                } else {
                     window.conferenceUI.onChatMessage(message, participant);
                 }
             } catch (error) {
@@ -270,7 +278,8 @@ class ConferenceManager {
             console.log('🎥 启用本地媒体...');
             
             // 启用摄像头和麦克风（TrackPublished 事件会自动处理附加）
-            await this.room.localParticipant.setCameraEnabled(true);
+            const cameraPublication = await this.room.localParticipant.setCameraEnabled(true);
+            this.attachLocalCameraTrack(cameraPublication);
             await this.room.localParticipant.setMicrophoneEnabled(true);
             
             console.log('✅ 本地媒体已启用（等待轨道发布事件）');
@@ -290,8 +299,12 @@ class ConferenceManager {
     async toggleCamera() {
         if (!this.room) return false;
         const enabled = this.room.localParticipant.isCameraEnabled;
-        await this.room.localParticipant.setCameraEnabled(!enabled);
-        return !enabled;
+        const newState = !enabled;
+        const publication = await this.room.localParticipant.setCameraEnabled(newState);
+        if (newState) {
+            this.attachLocalCameraTrack(publication);
+        }
+        return newState;
     }
 
     async toggleScreenShare() {
@@ -317,14 +330,13 @@ class ConferenceManager {
         
         const data = {
             type: 'chat',
-            message: message,
+            message,
             timestamp: Date.now(),
             sender: this.userName
         };
         
-        const encoder = new TextEncoder();
-        const payload = encoder.encode(JSON.stringify(data));
-        await this.room.localParticipant.publishData(payload, { reliable: true });
+        await this.publishData(data, { reliable: true });
+        await this.sendTypingState(false);
     }
 
     async disconnect() {
@@ -332,6 +344,7 @@ class ConferenceManager {
             await this.room.disconnect();
             this.room = null;
         }
+        this.typingState = false;
         window.conferenceUI?.stopCallTimer?.();
     }
 
@@ -359,5 +372,82 @@ class ConferenceManager {
         }
 
         return Array.isArray(participantMap) ? participantMap : Object.values(participantMap);
+    }
+
+    async sendTypingState(isTyping) {
+        if (!this.room) return;
+        if (this.typingState === isTyping) return;
+
+        this.typingState = isTyping;
+        const data = {
+            type: 'typing',
+            isTyping,
+            sender: this.userName,
+            sid: this.room.localParticipant?.sid,
+            timestamp: Date.now()
+        };
+
+        try {
+            await this.publishData(data, { reliable: false });
+        } catch (error) {
+            console.warn('发送输入状态失败:', error);
+        }
+    }
+
+    async publishData(data, options = { reliable: true }) {
+        if (!this.room) return;
+        const encoder = new TextEncoder();
+        const payload = encoder.encode(JSON.stringify(data));
+        await this.room.localParticipant.publishData(payload, options);
+    }
+
+    attachLocalCameraTrack(publication) {
+        if (!window.conferenceUI) {
+            return;
+        }
+
+        const track = this.findLocalCameraTrack(publication);
+        if (track) {
+            window.conferenceUI.attachLocalVideo(track);
+            return;
+        }
+
+        console.warn('  ⚠️ 本地摄像头轨道尚未就绪，稍后重试附加');
+        setTimeout(() => {
+            const retryTrack = this.findLocalCameraTrack();
+            if (retryTrack) {
+                window.conferenceUI.attachLocalVideo(retryTrack);
+            }
+        }, 300);
+    }
+
+    findLocalCameraTrack(publication) {
+        if (publication?.track) {
+            return publication.track;
+        }
+
+        const localParticipant = this.room?.localParticipant;
+        if (!localParticipant?.videoTracks) {
+            return null;
+        }
+
+        const publications = localParticipant.videoTracks instanceof Map
+            ? Array.from(localParticipant.videoTracks.values())
+            : Array.isArray(localParticipant.videoTracks)
+                ? localParticipant.videoTracks
+                : Object.values(localParticipant.videoTracks);
+
+        const TrackSource = window.LivekitClient?.Track?.Source;
+
+        for (const pub of publications) {
+            if (!pub || !pub.track) continue;
+            const isCameraSource = TrackSource
+                ? pub.source === TrackSource.CAMERA
+                : pub.kind === 'video';
+            if (isCameraSource) {
+                return pub.track;
+            }
+        }
+        return null;
     }
 }

@@ -1,4 +1,4 @@
-// 会议 UI 控制器
+// 会议 UI 控制器（适配新版布局）
 class ConferenceUI {
     constructor() {
         this.elements = {
@@ -9,7 +9,6 @@ class ConferenceUI {
             roomName: document.getElementById('roomName'),
             participantCount: document.getElementById('participantCount'),
             sidebarParticipantCount: document.getElementById('sidebarParticipantCount'),
-            emptyState: document.getElementById('emptyState'),
             loadingOverlay: document.getElementById('loadingOverlay'),
             loadingText: document.getElementById('loadingText'),
             participantsSidebar: document.getElementById('participantsSidebar'),
@@ -18,32 +17,59 @@ class ConferenceUI {
             chatMessages: document.getElementById('chatMessages'),
             chatInput: document.getElementById('chatInput'),
             chatSendBtn: document.getElementById('chatSendBtn'),
+            chatBadge: document.querySelector('#chatBtn .badge'),
             connectionStatus: document.getElementById('connectionStatus'),
             networkQuality: document.getElementById('networkQuality'),
             connectionStateText: document.getElementById('connectionStateText'),
+            miniConnectionState: document.getElementById('miniConnectionState'),
             callTimer: document.getElementById('callTimer'),
             screenShareIndicator: document.getElementById('screenShareIndicator'),
             shareScreenBtn: document.getElementById('shareScreenBtn'),
-            chatBadge: document.querySelector('#chatBtn .badge'),
-            toastContainer: document.getElementById('toastContainer')
+            toastContainer: document.getElementById('toastContainer'),
+            railCount: document.getElementById('railCount'),
+            railEmptyHint: document.getElementById('railEmptyHint'),
+            stageVideo: document.getElementById('stageVideo'),
+            stageLabel: document.getElementById('stageLabel'),
+            emptyState: document.getElementById('emptyState'),
+            resetSpotlightBtn: document.getElementById('resetSpotlightBtn'),
+            previewSpotlightBtn: document.getElementById('previewSpotlightBtn'),
+            typingIndicator: document.getElementById('typingIndicator'),
+            collapseChatBtn: document.getElementById('collapseChatBtn'),
+            chatSidebarToggle: document.getElementById('chatBtnBottom'),
+            participantsSidebarToggle: document.getElementById('participantsBtnBottom'),
+            copyLinkBtn: document.getElementById('copyStageBtn'),
+            stageSurface: document.getElementById('stageSurface')
         };
-        
-        this.remoteParticipants = new Map();
-        this.screenShareTiles = new Map();
-        this.localScreenShareElement = null;
+
+        this.remoteParticipants = new Map(); // sid -> tile
+        this.participantNames = new Map(); // sid -> name
+        this.remoteCameraTracks = new Map(); // sid -> track
+        this.remoteShareTracks = new Map(); // sid -> track
+
+        this.localCameraTrack = null;
+        this.localScreenShareTrack = null;
+        this.stageTrack = null;
+        this.stageParticipantSid = null;
+        this.stageIsScreenShare = false;
+        this.stageForcedByShare = null;
+        this.userPinnedSid = null;
+        this.lastActiveSpeakerSid = null;
         this.callTimerInterval = null;
+
         this.unreadChatCount = 0;
-        this.trackSource = window.LivekitClient?.Track?.Source || {};
-        this.screenShareSource = this.trackSource.SCREEN_SHARE || 'screen_share';
-        
+        this.typingParticipants = new Map(); // sid -> { name, timeout }
+        this.isTyping = false;
+        this.typingTimeoutId = null;
+
         this.setupSidebarListeners();
         this.setupChatListeners();
+        this.bindStageControls();
         this.setConnectionState('idle');
         this.updateScreenShareIndicator();
+        this.updateRailState();
     }
 
     setupSidebarListeners() {
-        // 关闭侧边栏按钮
         document.querySelectorAll('.close-sidebar').forEach(btn => {
             btn.addEventListener('click', () => {
                 this.elements.participantsSidebar?.classList.remove('active');
@@ -51,45 +77,68 @@ class ConferenceUI {
             });
         });
 
-        // 参与者按钮
-        const participantsBtn = document.getElementById('participantsBtn');
-        if (participantsBtn) {
-            participantsBtn.addEventListener('click', () => {
-                this.toggleSidebar('participants');
+        const bindToggle = (button, type) => {
+            if (!button) return;
+            button.addEventListener('click', () => this.toggleSidebar(type));
+        };
+
+        bindToggle(document.getElementById('participantsBtn'), 'participants');
+        bindToggle(this.elements.participantsSidebarToggle, 'participants');
+        bindToggle(document.getElementById('chatBtn'), 'chat');
+        bindToggle(this.elements.chatSidebarToggle, 'chat');
+
+        [document.getElementById('shareBtn'), this.elements.copyLinkBtn].forEach(btn => {
+            if (btn) {
+                btn.addEventListener('click', () => this.shareLink());
+            }
+        });
+    }
+
+    bindStageControls() {
+        if (this.elements.collapseChatBtn) {
+            this.elements.collapseChatBtn.addEventListener('click', () => {
+                this.elements.chatSidebar?.classList.toggle('active');
             });
         }
 
-        // 聊天按钮
-        const chatBtn = document.getElementById('chatBtn');
-        if (chatBtn) {
-            chatBtn.addEventListener('click', () => {
-                this.toggleSidebar('chat');
+        if (this.elements.resetSpotlightBtn) {
+            this.elements.resetSpotlightBtn.addEventListener('click', () => {
+                this.clearUserSpotlight();
             });
         }
 
-        // 分享按钮
-        const shareBtn = document.getElementById('shareBtn');
-        if (shareBtn) {
-            shareBtn.addEventListener('click', () => {
-                this.shareLink();
+        if (this.elements.previewSpotlightBtn) {
+            this.elements.previewSpotlightBtn.addEventListener('click', () => {
+                this.previewLocalOnStage();
+            });
+        }
+
+        if (this.elements.stageSurface) {
+            this.elements.stageSurface.addEventListener('dblclick', () => {
+                if (this.stageParticipantSid) {
+                    this.userPinnedSid = this.stageParticipantSid;
+                    this.setPinnedTile(this.stageParticipantSid);
+                    this.showToast('已固定当前画面', 'info');
+                }
             });
         }
     }
 
     setupChatListeners() {
         if (this.elements.chatSendBtn) {
-            this.elements.chatSendBtn.addEventListener('click', () => {
-                this.sendChatMessage();
-            });
+            this.elements.chatSendBtn.addEventListener('click', () => this.sendChatMessage());
         }
 
         if (this.elements.chatInput) {
-            this.elements.chatInput.addEventListener('keypress', (e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
+            this.elements.chatInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && (e.ctrlKey || !e.shiftKey)) {
                     e.preventDefault();
                     this.sendChatMessage();
                 }
             });
+
+            this.elements.chatInput.addEventListener('input', () => this.handleLocalTyping());
+            this.elements.chatInput.addEventListener('blur', () => this.stopLocalTyping());
         }
     }
 
@@ -99,33 +148,44 @@ class ConferenceUI {
         }
     }
 
+    getLocalParticipantSid() {
+        return window.conferenceManager?.room?.localParticipant?.sid || 'local';
+    }
+
     setConnectionState(state) {
         const stateText = {
-            'idle': '准备中',
-            'connecting': '连接中',
-            'connected': '已连接',
-            'reconnecting': '重连中',
-            'disconnected': '已断开'
+            idle: '准备中',
+            connecting: '连接中',
+            connected: '已连接',
+            reconnecting: '重连中',
+            disconnected: '已断开'
         };
+
         const stateClass = {
-            'idle': 'status-pill',
-            'connecting': 'status-pill status-connecting',
-            'connected': 'status-pill status-connected',
-            'reconnecting': 'status-pill status-warning',
-            'disconnected': 'status-pill status-error'
+            idle: 'status-pill',
+            connecting: 'status-pill status-connecting',
+            connected: 'status-pill status-connected',
+            reconnecting: 'status-pill status-warning',
+            disconnected: 'status-pill status-error'
         };
+
+        const text = stateText[state] || '未知状态';
+        const cls = stateClass[state] || 'status-pill';
 
         if (this.elements.connectionStateText) {
-            this.elements.connectionStateText.textContent = stateText[state] || '未知状态';
-            this.elements.connectionStateText.className = stateClass[state] || 'status-pill';
+            this.elements.connectionStateText.textContent = text;
+            this.elements.connectionStateText.className = cls;
         }
-
+        if (this.elements.miniConnectionState) {
+            this.elements.miniConnectionState.textContent = text;
+            this.elements.miniConnectionState.className = cls;
+        }
         if (this.elements.connectionStatus) {
             const dotClass = {
-                'connected': 'status-dot connected',
-                'connecting': 'status-dot connecting',
-                'reconnecting': 'status-dot warning',
-                'disconnected': 'status-dot disconnected'
+                connected: 'status-dot connected',
+                connecting: 'status-dot connecting',
+                reconnecting: 'status-dot warning',
+                disconnected: 'status-dot disconnected'
             };
             this.elements.connectionStatus.className = dotClass[state] || 'status-dot';
         }
@@ -135,13 +195,13 @@ class ConferenceUI {
         this.stopCallTimer();
         if (!this.elements.callTimer) return;
 
-        const updateTimer = () => {
+        const update = () => {
             const diff = Date.now() - startTimestamp;
             this.elements.callTimer.textContent = this.formatDuration(diff);
         };
 
-        updateTimer();
-        this.callTimerInterval = setInterval(updateTimer, 1000);
+        update();
+        this.callTimerInterval = setInterval(update, 1000);
     }
 
     stopCallTimer() {
@@ -168,9 +228,8 @@ class ConferenceUI {
 
     updateScreenShareIndicator() {
         if (!this.elements.screenShareIndicator) return;
-
-        const hasScreenShare = this.screenShareTiles.size > 0 || !!this.localScreenShareElement;
-        if (hasScreenShare) {
+        const hasShare = this.remoteShareTracks.size > 0 || !!this.localScreenShareTrack;
+        if (hasShare) {
             this.elements.screenShareIndicator.style.display = 'inline-flex';
             this.elements.screenShareIndicator.classList.add('active');
             this.elements.screenShareIndicator.textContent = '屏幕共享中';
@@ -199,41 +258,36 @@ class ConferenceUI {
 
     updateParticipantsList() {
         if (!this.elements.participantsList) return;
-        
         const manager = window.conferenceManager;
         if (!manager || !manager.room) return;
 
         const participants = [];
-        
-        // 添加本地参与者
+
         if (manager.room.localParticipant) {
             participants.push({
-                identity: manager.userName + ' (我)',
+                identity: `${manager.userName || '我'} (我)`,
                 isMicEnabled: manager.room.localParticipant.isMicrophoneEnabled,
                 isCameraEnabled: manager.room.localParticipant.isCameraEnabled,
                 isLocal: true,
-                isScreenSharing: !!this.localScreenShareElement
+                isScreenSharing: !!this.localScreenShareTrack
             });
         }
 
-        // 添加远程参与者
-        const remoteParticipants = manager.getRemoteParticipants();
-        if (remoteParticipants && remoteParticipants.length > 0) {
-            remoteParticipants.forEach(p => {
-                participants.push({
-                    identity: p.identity,
-                    isMicEnabled: p.isMicrophoneEnabled,
-                    isCameraEnabled: p.isCameraEnabled,
-                    isLocal: false,
-                    isScreenSharing: this.screenShareTiles.has(p.sid)
-                });
+        const remotes = manager.getRemoteParticipants() || [];
+        remotes.forEach((p) => {
+            participants.push({
+                identity: p.identity,
+                isMicEnabled: p.isMicrophoneEnabled,
+                isCameraEnabled: p.isCameraEnabled,
+                isLocal: false,
+                isScreenSharing: this.remoteShareTracks.has(p.sid)
             });
-        }
+        });
 
         this.elements.participantsList.innerHTML = participants.map(p => `
             <div class="participant-item">
                 <div class="participant-avatar">
-                    <i class="bi bi-person-circle"></i>
+                    <i class="bi ${p.isLocal ? 'bi-person-fill' : 'bi-person-circle'}"></i>
                 </div>
                 <div class="participant-details">
                     <div class="participant-name">
@@ -256,39 +310,100 @@ class ConferenceUI {
         if (!message) return;
 
         const manager = window.conferenceManager;
-        if (manager) {
-            manager.sendChatMessage(message);
-            this.elements.chatInput.value = '';
-        }
+        if (!manager) return;
+
+        manager.sendChatMessage(message);
+        this.elements.chatInput.value = '';
+        this.stopLocalTyping();
     }
 
     onChatMessage(message, participant) {
         if (!this.elements.chatMessages) return;
 
-        const isLocal = !participant; // 本地消息没有 participant
-        const sender = isLocal ? '我' : (participant?.identity || '未知');
-        const time = new Date(message.timestamp).toLocaleTimeString('zh-CN', { 
-            hour: '2-digit', 
-            minute: '2-digit' 
+        const isLocal = !participant;
+        const sender = isLocal ? '我' : (participant?.identity || message.sender || '参会者');
+        const timeStr = new Date(message.timestamp || Date.now()).toLocaleTimeString('zh-CN', {
+            hour: '2-digit',
+            minute: '2-digit'
         });
 
-        const messageEl = document.createElement('div');
-        messageEl.className = `chat-message ${isLocal ? 'local' : 'remote'}`;
-        messageEl.innerHTML = `
+        const wrapper = document.createElement('div');
+        wrapper.className = `chat-message ${isLocal ? 'local' : 'remote'}`;
+        wrapper.innerHTML = `
             <div class="message-header">
                 <span class="message-sender">${this.escapeHtml(sender)}</span>
-                <span class="message-time">${time}</span>
+                <span class="message-time">${timeStr}</span>
             </div>
-            <div class="message-content">${this.escapeHtml(message.message)}</div>
+            <div class="message-bubble">${this.escapeHtml(message.message)}</div>
         `;
 
-        this.elements.chatMessages.appendChild(messageEl);
+        this.elements.chatMessages.appendChild(wrapper);
         this.elements.chatMessages.scrollTop = this.elements.chatMessages.scrollHeight;
 
         if (!isLocal && !this.elements.chatSidebar?.classList.contains('active')) {
             this.incrementChatUnread();
             this.showToast(`${sender}: ${message.message}`, 'info');
         }
+    }
+
+    onTypingEvent(payload, participant) {
+        if (!this.elements.typingIndicator) return;
+        const sid = participant?.sid || payload?.sid;
+        const name = participant?.identity || payload?.sender || '参会者';
+        if (!sid) return;
+
+        if (payload.isTyping) {
+            if (this.typingParticipants.has(sid)) {
+                clearTimeout(this.typingParticipants.get(sid).timer);
+            }
+            const timer = setTimeout(() => {
+                this.typingParticipants.delete(sid);
+                this.updateTypingIndicator();
+            }, 5000);
+            this.typingParticipants.set(sid, { name, timer });
+        } else if (this.typingParticipants.has(sid)) {
+            clearTimeout(this.typingParticipants.get(sid).timer);
+            this.typingParticipants.delete(sid);
+        }
+
+        this.updateTypingIndicator();
+    }
+
+    handleLocalTyping() {
+        if (this.isTyping) {
+            if (this.typingTimeoutId) {
+                clearTimeout(this.typingTimeoutId);
+            }
+            this.typingTimeoutId = setTimeout(() => this.stopLocalTyping(), 4000);
+            return;
+        }
+
+        this.isTyping = true;
+        window.conferenceManager?.sendTypingState(true);
+        this.typingTimeoutId = setTimeout(() => this.stopLocalTyping(), 4000);
+    }
+
+    stopLocalTyping() {
+        if (!this.isTyping) return;
+        this.isTyping = false;
+        window.conferenceManager?.sendTypingState(false);
+        if (this.typingTimeoutId) {
+            clearTimeout(this.typingTimeoutId);
+            this.typingTimeoutId = null;
+        }
+    }
+
+    updateTypingIndicator() {
+        if (!this.elements.typingIndicator) return;
+        if (this.typingParticipants.size === 0) {
+            this.elements.typingIndicator.textContent = '';
+            return;
+        }
+        const names = Array.from(this.typingParticipants.values()).map(item => item.name);
+        const text = names.length > 2
+            ? `${names.slice(0, 2).join('、')} 等多人正在输入...`
+            : `${names.join('、')} 正在输入...`;
+        this.elements.typingIndicator.textContent = text;
     }
 
     incrementChatUnread() {
@@ -316,9 +431,7 @@ class ConferenceUI {
                 title: '邀请加入会议',
                 text: `加入会议 ${room}`,
                 url
-            }).catch(() => {
-                // 用户取消分享无需提示
-            });
+            }).catch(() => {});
             return;
         }
 
@@ -358,6 +471,9 @@ class ConferenceUI {
         if (this.elements.sidebarParticipantCount) {
             this.elements.sidebarParticipantCount.textContent = participantCount;
         }
+        if (this.elements.railCount) {
+            this.elements.railCount.textContent = this.remoteParticipants.size;
+        }
 
         const participantsBtn = document.getElementById('participantsBtn');
         const badge = participantsBtn?.querySelector('.badge');
@@ -369,108 +485,99 @@ class ConferenceUI {
         const safeName = roomName || '视频会议';
         document.title = `LiveKit · ${safeName} (${participantCount}人)`;
 
-        console.log('📊 更新房间信息:', { roomName, participantCount });
-
-        // 更新参与者列表（如果打开）
         if (this.elements.participantsSidebar?.classList.contains('active')) {
             this.updateParticipantsList();
         }
     }
 
-    updateEmptyState() {
-        const remoteCount = this.remoteParticipants.size;
-        const hasScreenShare = this.screenShareTiles.size > 0 || !!this.localScreenShareElement;
-        
-        // 关键修复：只要有远程参与者，或者有屏幕共享，就隐藏空状态
-        // 即使只有1个人在会议中也不显示空状态（因为至少有自己）
-        const shouldShowEmpty = (remoteCount === 0 && !hasScreenShare);
-        
-        console.log('📊 updateEmptyState:', {
-            remoteParticipants: remoteCount,
-            hasScreenShare: hasScreenShare,
-            shouldShowEmpty: shouldShowEmpty,
-            currentDisplay: this.elements.emptyState?.style.display
-        });
-        
-        if (this.elements.emptyState) {
-            const newDisplay = shouldShowEmpty ? 'flex' : 'none';
-            this.elements.emptyState.style.display = newDisplay;
-            console.log(`  → 空状态设置为: ${newDisplay}`);
-        } else {
-            console.warn('  ⚠️ emptyState 元素不存在！');
+    updateRailState() {
+        if (this.elements.railCount) {
+            this.elements.railCount.textContent = this.remoteParticipants.size;
         }
+        if (this.elements.railEmptyHint) {
+            this.elements.railEmptyHint.style.display = this.remoteParticipants.size === 0 ? 'block' : 'none';
+        }
+    }
+
+    updateEmptyState() {
+        if (!this.elements.emptyState) return;
+        const hasStageTrack = !!this.stageTrack;
+        const hasRemote = this.remoteParticipants.size > 0;
+        const hasShare = this.remoteShareTracks.size > 0 || !!this.localScreenShareTrack;
+        const shouldShow = !(hasStageTrack || hasRemote || hasShare);
+        this.elements.emptyState.style.display = shouldShow ? 'flex' : 'none';
     }
 
     attachLocalVideo(track) {
         if (this.elements.localVideo && track) {
+            this.localCameraTrack = track;
             track.attach(this.elements.localVideo);
-            console.log('✅ 本地视频已附加');
+            if (this.userPinnedSid === 'local' || this.stageParticipantSid === 'local') {
+                this.setStageTrack(track, {
+                    sid: 'local',
+                    identity: this.elements.localName?.textContent || '我'
+                });
+            }
         }
     }
 
     onParticipantConnected(participant) {
-        console.log('🎉 onParticipantConnected:', participant.identity, 'SID:', participant.sid);
+        if (!participant?.sid) return;
+        this.participantNames.set(participant.sid, participant.identity || '参会者');
         this.addParticipant(participant);
-        
-        // 立即更新UI和状态
         this.updateParticipantCount();
-        this.updateEmptyState(); // 有人加入，立即隐藏空状态
-        
+        this.updateRailState();
+        this.updateEmptyState();
         this.showToast(`${participant.identity} 加入了会议`, 'info');
     }
 
     onParticipantDisconnected(participant) {
-        console.log('UI: 移除参与者', participant.identity);
+        if (!participant?.sid) return;
+        this.remoteCameraTracks.delete(participant.sid);
+        this.remoteShareTracks.delete(participant.sid);
+        this.participantNames.delete(participant.sid);
         this.removeParticipant(participant.sid);
-        this.removeScreenShareTile(participant.sid);
+
+        if (this.stageParticipantSid === participant.sid) {
+            this.stageTrack?.detach(this.elements.stageVideo);
+            this.stageTrack = null;
+            this.stageParticipantSid = null;
+            this.stageIsScreenShare = false;
+            this.maybeAutoSelectStage('participant-disconnected');
+        }
+
+        if (this.userPinnedSid === participant.sid) {
+            this.userPinnedSid = null;
+        }
+
+        if (this.stageForcedByShare === participant.sid) {
+            this.stageForcedByShare = null;
+        }
+
         this.updateParticipantCount();
+        this.updateRailState();
         this.updateEmptyState();
         this.showToast(`${participant.identity} 离开了会议`, 'info');
     }
 
     onTrackSubscribed(track, participant, options = {}) {
-        if (!track || !participant) {
-            console.warn('⚠️ onTrackSubscribed: track 或 participant 为空');
-            return;
-        }
-
-        console.log('📹 onTrackSubscribed 被调用:', {
-            participant: participant.identity,
-            sid: participant.sid,
-            kind: track.kind,
-            source: track.source,
-            isScreenShare: options.isScreenShare,
-            trackSid: track.sid
-        });
+        if (!track || !participant) return;
+        const isScreenShare = options.isScreenShare;
+        this.participantNames.set(participant.sid, participant.identity || this.participantNames.get(participant.sid) || '参会者');
 
         if (track.kind === 'video') {
-            if (options.isScreenShare) {
-                console.log('  → 附加屏幕共享视频');
+            if (isScreenShare) {
                 this.attachScreenShareTrack(track, participant);
-                this.updateEmptyState();
                 return;
             }
+            this.ensureParticipantTile(participant);
+            this.remoteCameraTracks.set(participant.sid, track);
+            this.attachTrackToTile(participant.sid, track);
 
-            // 检查参与者UI是否存在，如果不存在则先创建
-            let element = this.remoteParticipants.get(participant.sid);
-            if (!element) {
-                console.warn('  ⚠️ 参与者 tile 不存在，先创建 UI');
-                this.addParticipant(participant);
-                element = this.remoteParticipants.get(participant.sid);
-            }
-
-            if (element) {
-                const video = element.querySelector('video');
-                if (video) {
-                    track.attach(video);
-                    console.log('  ✅ 视频已附加到 DOM');
-                    // 视频附加后立即隐藏空状态
-                    this.updateEmptyState();
-                } else {
-                    console.error('  ❌ 找不到 video 元素');
-                }
+            if (this.userPinnedSid === participant.sid) {
+                this.setStageTrack(track, participant);
             } else {
-                console.error('  ❌ 无法创建参与者 tile');
+                this.maybeAutoSelectStage('video-subscribed');
             }
         } else if (track.kind === 'audio') {
             const audioId = `audio-${participant.sid}${options.isScreenShareAudio ? '-screen' : ''}`;
@@ -480,9 +587,6 @@ class ConferenceUI {
                 audioElement.id = audioId;
                 track.attach(audioElement);
                 document.body.appendChild(audioElement);
-                console.log('  ✅ 音频已附加');
-            } else {
-                console.log('  ℹ️ 音频元素已存在');
             }
         }
     }
@@ -491,28 +595,36 @@ class ConferenceUI {
         if (!track || !participant) return;
 
         if (options.isScreenShare) {
-            this.removeScreenShareTile(participant.sid);
+            this.removeScreenShare(participant.sid);
             return;
         }
 
-        if (track.kind === 'audio') {
+        if (track.kind === 'video') {
+            this.remoteCameraTracks.delete(participant.sid);
+            this.detachTrackFromTile(participant.sid);
+            if (this.stageParticipantSid === participant.sid && !this.stageForcedByShare) {
+                this.stageTrack?.detach(this.elements.stageVideo);
+                this.stageTrack = null;
+                this.stageParticipantSid = null;
+                this.stageIsScreenShare = false;
+                this.maybeAutoSelectStage('video-unsubscribed');
+            }
+        } else if (track.kind === 'audio') {
             const suffix = options.isScreenShareAudio ? '-screen' : '';
             const audioElement = document.getElementById(`audio-${participant.sid}${suffix}`);
-            if (audioElement) {
-                audioElement.remove();
-            }
+            audioElement?.remove();
         }
     }
 
     onConnectionQualityChanged(participant, quality) {
         const qualityMap = {
-            'excellent': '优秀',
-            'good': '良好',
-            'poor': '较差',
-            'lost': '断开'
+            excellent: '优秀',
+            good: '良好',
+            poor: '较差',
+            lost: '断开'
         };
 
-        const localSid = window.conferenceManager?.room?.localParticipant?.sid;
+        const localSid = this.getLocalParticipantSid();
         const participantSid = participant?.sid;
 
         if (!participant || participantSid === localSid) {
@@ -541,25 +653,27 @@ class ConferenceUI {
             tile.classList.toggle('active-speaker', activeSet.has(sid));
         });
 
-        const localSid = window.conferenceManager?.room?.localParticipant?.sid;
-        if (this.elements.localTile && localSid) {
+        const localSid = this.getLocalParticipantSid();
+        if (this.elements.localTile) {
             this.elements.localTile.classList.toggle('active-speaker', activeSet.has(localSid));
+        }
+
+        if (!this.userPinnedSid && !this.stageForcedByShare) {
+            const firstSpeaker = speakers.find(sp => this.remoteCameraTracks.has(sp.sid));
+            if (firstSpeaker) {
+                this.lastActiveSpeakerSid = firstSpeaker.sid;
+                this.setStageToSid(firstSpeaker.sid);
+            }
         }
     }
 
     addParticipant(participant) {
-        if (this.remoteParticipants.has(participant.sid)) {
-            console.log('  ⚠️ 参与者已存在，跳过:', participant.identity, participant.sid);
-            return;
-        }
-
-        console.log('  ➕ 创建参与者 tile:', participant.identity, 'SID:', participant.sid);
-
+        if (this.remoteParticipants.has(participant.sid)) return;
         const tile = document.createElement('div');
-        tile.className = 'video-tile';
+        tile.className = 'video-tile rail-tile';
         tile.id = `participant-${participant.sid}`;
         tile.innerHTML = `
-            <video autoplay playsinline></video>
+            <video autoplay playsinline muted></video>
             <div class="participant-info">
                 <div class="name-badge">
                     <i class="bi bi-mic-fill audio-indicator"></i>
@@ -568,25 +682,73 @@ class ConferenceUI {
             </div>
         `;
 
-        // 先添加到 Map 和 DOM
+        tile.addEventListener('click', () => this.handleTileClick(participant.sid));
         this.remoteParticipants.set(participant.sid, tile);
-        this.elements.videoGrid.appendChild(tile);
-        console.log('  ✅ Tile 已添加，当前远程参与者数:', this.remoteParticipants.size);
+        this.elements.videoGrid?.appendChild(tile);
 
-        // 注意：不在这里处理轨道，由 onTrackSubscribed 统一处理
-        // 这样避免重复附加轨道
-
-        // 监听麦克风状态变化
         participant.on('trackMuted', (publication) => {
             if (publication.kind === 'audio') {
                 this.updateAudioIndicator(participant.sid, false);
             }
         });
-
         participant.on('trackUnmuted', (publication) => {
             if (publication.kind === 'audio') {
                 this.updateAudioIndicator(participant.sid, true);
             }
+        });
+    }
+
+    ensureParticipantTile(participant) {
+        if (!participant?.sid) return null;
+        if (!this.remoteParticipants.has(participant.sid)) {
+            this.addParticipant(participant);
+            this.updateRailState();
+            this.updateEmptyState();
+        }
+        return this.remoteParticipants.get(participant.sid);
+    }
+
+    handleTileClick(sid) {
+        this.userPinnedSid = sid;
+        this.stageForcedByShare = null;
+        this.setPinnedTile(sid);
+        if (!this.setStageToSid(sid, { manual: true })) {
+            this.showToast('该成员暂无可显示的视频轨道', 'warning');
+        } else {
+            const name = this.participantNames.get(sid) || '参会者';
+            this.showToast(`已固定 ${name}`, 'info');
+        }
+    }
+
+    setPinnedTile(sid) {
+        this.remoteParticipants.forEach((tile, participantSid) => {
+            tile.classList.toggle('pinned', participantSid === sid);
+        });
+        if (this.elements.localTile) {
+            const localSid = this.getLocalParticipantSid();
+            const isPinnedLocal = sid === 'local' || sid === localSid;
+            this.elements.localTile.classList.toggle('pinned', isPinnedLocal);
+        }
+    }
+
+    clearUserSpotlight() {
+        this.userPinnedSid = null;
+        this.setPinnedTile(null);
+        this.showToast('已恢复自动跟随模式', 'info');
+        this.maybeAutoSelectStage('clear-spotlight');
+    }
+
+    previewLocalOnStage() {
+        if (!this.localCameraTrack) {
+            this.showToast('摄像头未开启', 'warning');
+            return;
+        }
+        this.userPinnedSid = 'local';
+        this.stageForcedByShare = null;
+        this.setPinnedTile('local');
+        this.setStageTrack(this.localCameraTrack, {
+            sid: 'local',
+            identity: this.elements.localName?.textContent || '我'
         });
     }
 
@@ -607,84 +769,65 @@ class ConferenceUI {
             element.remove();
             this.remoteParticipants.delete(sid);
         }
-
-        // 移除音频元素
         const audioElement = document.getElementById(`audio-${sid}`);
-        if (audioElement) {
-            audioElement.remove();
-        }
+        audioElement?.remove();
+    }
 
-        this.removeScreenShareTile(sid);
+    attachTrackToTile(sid, track) {
+        const tile = this.remoteParticipants.get(sid);
+        const video = tile?.querySelector('video');
+        if (video) {
+            track.attach(video);
+        }
+    }
+
+    detachTrackFromTile(sid) {
+        const tile = this.remoteParticipants.get(sid);
+        const video = tile?.querySelector('video');
+        if (video) {
+            video.srcObject = null;
+            video.load();
+        }
     }
 
     attachScreenShareTrack(track, participant) {
-        if (!track || !participant?.sid) return;
-
-        const sid = participant.sid;
-        let tile = this.screenShareTiles.get(sid);
-        if (!tile) {
-            const label = (participant.identity || '参会者') + ' 的屏幕';
-            tile = this.createScreenShareTile(`screen-${sid}`, label);
-            this.screenShareTiles.set(sid, tile);
-            this.elements.videoGrid.appendChild(tile);
-        }
-
-        const video = tile.querySelector('video');
-        track.attach(video);
-        tile.classList.add('active');
+        this.remoteShareTracks.set(participant.sid, track);
+        this.stageForcedByShare = participant.sid;
+        this.setStageTrack(track, participant, { isScreenShare: true });
         this.updateScreenShareIndicator();
         this.showToast(`${participant.identity} 开始共享屏幕`, 'info');
         this.updateEmptyState();
     }
 
-    createScreenShareTile(id, title) {
-        const tile = document.createElement('div');
-        tile.className = 'video-tile screen-share';
-        tile.id = id;
-        tile.innerHTML = `
-            <video autoplay playsinline muted></video>
-            <div class="participant-info">
-                <div class="name-badge">
-                    <i class="bi bi-display"></i>
-                    <span>${this.escapeHtml(title)}</span>
-                </div>
-            </div>
-        `;
-        return tile;
-    }
-
-    removeScreenShareTile(participantSid) {
-        if (!participantSid) return;
-        const tile = this.screenShareTiles.get(participantSid);
-        if (tile) {
-            tile.remove();
-            this.screenShareTiles.delete(participantSid);
-            this.showToast('屏幕共享已结束', 'info');
+    removeScreenShare(participantSid) {
+        this.remoteShareTracks.delete(participantSid);
+        if (this.stageForcedByShare === participantSid) {
+            this.stageForcedByShare = null;
+            this.maybeAutoSelectStage('share-ended');
         }
-
         this.updateScreenShareIndicator();
         this.updateEmptyState();
+        this.showToast('屏幕共享已结束', 'info');
     }
 
     onLocalScreenShareStarted(track) {
         if (!track) return;
-        if (!this.localScreenShareElement) {
-            this.localScreenShareElement = this.createScreenShareTile('local-screen', '我的屏幕');
-            this.localScreenShareElement.classList.add('local-share');
-            this.elements.videoGrid.appendChild(this.localScreenShareElement);
-        }
-
-        const video = this.localScreenShareElement.querySelector('video');
-        track.attach(video);
+        this.localScreenShareTrack = track;
+        this.stageForcedByShare = 'local';
+        this.setStageTrack(track, {
+            sid: 'local',
+            identity: this.elements.localName?.textContent || '我'
+        }, { isScreenShare: true });
         this.updateScreenShareIndicator();
         this.showToast('屏幕共享已开启', 'success');
         this.updateEmptyState();
     }
 
     onLocalScreenShareStopped() {
-        if (this.localScreenShareElement) {
-            this.localScreenShareElement.remove();
-            this.localScreenShareElement = null;
+        this.localScreenShareTrack = null;
+        if (this.stageForcedByShare === 'local') {
+            this.stageForcedByShare = null;
+            this.maybeAutoSelectStage('local-share-stop');
         }
         this.updateScreenShareIndicator();
         this.showToast('屏幕共享已结束', 'info');
@@ -694,22 +837,124 @@ class ConferenceUI {
     updateParticipantCount() {
         const manager = window.conferenceManager;
         const count = manager ? manager.getParticipantCount() : (this.remoteParticipants.size + 1);
-        console.log('📊 updateParticipantCount:', {
-            remoteParticipants: this.remoteParticipants.size,
-            totalCount: count
-        });
         this.updateRoomInfo(this.elements.roomName?.textContent || '', count);
     }
 
     updateButtonState(buttonId, active) {
         const button = document.getElementById(buttonId);
         if (button) {
-            if (active) {
-                button.classList.add('active');
-            } else {
-                button.classList.remove('active');
-            }
+            button.classList.toggle('active', !!active);
         }
+    }
+
+    setStageToSid(sid, options = {}) {
+        if (!sid) return false;
+        if (sid === 'local' || sid === this.getLocalParticipantSid()) {
+            if (this.localCameraTrack) {
+                this.setStageTrack(this.localCameraTrack, {
+                    sid: 'local',
+                    identity: this.elements.localName?.textContent || '我'
+                }, options);
+                return true;
+            }
+            return false;
+        }
+
+        let track = this.remoteCameraTracks.get(sid);
+        let isScreenShare = false;
+        if (!track && this.remoteShareTracks.has(sid)) {
+            track = this.remoteShareTracks.get(sid);
+            isScreenShare = true;
+        }
+        if (!track) return false;
+
+        const participant = {
+            sid,
+            identity: this.participantNames.get(sid) || '参会者'
+        };
+        this.setStageTrack(track, participant, { ...options, isScreenShare });
+        return true;
+    }
+
+    setStageTrack(track, participant, options = {}) {
+        if (!this.elements.stageVideo || !track || !participant) return;
+
+        if (this.stageTrack && this.stageTrack !== track) {
+            this.stageTrack.detach(this.elements.stageVideo);
+        }
+
+        track.attach(this.elements.stageVideo);
+        this.stageTrack = track;
+        this.stageParticipantSid = participant.sid;
+        this.stageIsScreenShare = !!options.isScreenShare;
+        this.updateStageLabel(participant.identity, this.stageIsScreenShare);
+        this.setPinnedTile(this.userPinnedSid === participant.sid ? participant.sid : this.userPinnedSid);
+        this.updateEmptyState();
+    }
+
+    updateStageLabel(name, isScreenShare = false) {
+        if (!this.elements.stageLabel) return;
+        if (!name) {
+            this.elements.stageLabel.textContent = '尚未选定';
+            return;
+        }
+        this.elements.stageLabel.textContent = isScreenShare
+            ? `${name} 的屏幕`
+            : `${name} 的视频`;
+    }
+
+    maybeAutoSelectStage(reason = '') {
+        if (this.stageForcedByShare) {
+            if (this.stageForcedByShare === 'local' && this.localScreenShareTrack) {
+                this.setStageTrack(this.localScreenShareTrack, {
+                    sid: 'local',
+                    identity: this.elements.localName?.textContent || '我'
+                }, { isScreenShare: true });
+                return;
+            }
+            const shareTrack = this.remoteShareTracks.get(this.stageForcedByShare);
+            if (shareTrack) {
+                this.setStageTrack(shareTrack, {
+                    sid: this.stageForcedByShare,
+                    identity: this.participantNames.get(this.stageForcedByShare) || '参会者'
+                }, { isScreenShare: true });
+                return;
+            }
+            this.stageForcedByShare = null;
+        }
+
+        if (this.userPinnedSid) {
+            if (this.setStageToSid(this.userPinnedSid)) {
+                return;
+            }
+            this.userPinnedSid = null;
+        }
+
+        if (this.lastActiveSpeakerSid && this.setStageToSid(this.lastActiveSpeakerSid)) {
+            return;
+        }
+
+        const fallbackSid = this.findFirstAvailableSid();
+        if (fallbackSid) {
+            this.setStageToSid(fallbackSid);
+        } else if (this.stageTrack) {
+            this.stageTrack.detach(this.elements.stageVideo);
+            this.stageTrack = null;
+            this.stageParticipantSid = null;
+            this.stageIsScreenShare = false;
+            this.updateStageLabel(null);
+            this.updateEmptyState();
+        }
+    }
+
+    findFirstAvailableSid() {
+        if (this.remoteCameraTracks.size > 0) {
+            return this.remoteCameraTracks.keys().next().value;
+        }
+        if (this.remoteShareTracks.size > 0) {
+            return this.remoteShareTracks.keys().next().value;
+        }
+        return null;
     }
 
     showToast(message, type = 'info') {
@@ -719,35 +964,29 @@ class ConferenceUI {
         }
 
         const toast = document.createElement('div');
-        toast.className = `toast toast-${type}`;
-        
-        const iconMap = {
-            'success': 'bi-check-circle-fill',
-            'error': 'bi-x-circle-fill',
-            'info': 'bi-info-circle-fill',
-            'warning': 'bi-exclamation-triangle-fill'
-        };
-        
-        toast.innerHTML = `
-            <i class="bi ${iconMap[type] || iconMap.info}"></i>
-            <span>${this.escapeHtml(message)}</span>
-        `;
-
+        toast.className = `toast-message toast-${type}`;
+        toast.textContent = message;
         this.elements.toastContainer.appendChild(toast);
 
-        // 触发动画
-        setTimeout(() => toast.classList.add('show'), 10);
+        setTimeout(() => {
+            toast.classList.add('show');
+        }, 50);
 
-        // 自动移除
         setTimeout(() => {
             toast.classList.remove('show');
             setTimeout(() => toast.remove(), 300);
-        }, 3000);
+        }, 4000);
     }
 
     escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
+        if (!text) return '';
+        const map = {
+            '&': '&amp;',
+            '<': '&lt;',
+            '>': '&gt;',
+            '"': '&quot;',
+            "'": '&#039;'
+        };
+        return text.replace(/[&<>"']/g, m => map[m]);
     }
 }
