@@ -1,4 +1,53 @@
 // 主页逻辑
+
+/**
+ * Fetches a LiveKit token and redirects the user to the conference page.
+ * @param {string} userName - The name of the participant.
+ * @param {string} roomName - The name of the room to join.
+ * @param {HomePage} homePageInstance - The instance of the HomePage class to call UI methods on.
+ */
+async function requestTokenAndRedirect(userName, roomName, homePageInstance) {
+    homePageInstance.showLoading('正在获取令牌...');
+    try {
+        const response = await fetch('/api/token', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                roomName: roomName,
+                participantName: userName
+            })
+        });
+
+        if (!response.ok) {
+            const errorBody = await response.text();
+            throw new Error(errorBody || '获取令牌失败，请检查服务端日志');
+        }
+
+        const data = await response.json();
+        
+        // 将令牌和URL存储到sessionStorage
+        sessionStorage.setItem('livekit_token', data.token);
+        sessionStorage.setItem('livekit_url', data.url);
+        sessionStorage.setItem('room_name', data.roomName);
+        sessionStorage.setItem('participant_name', userName);
+
+        homePageInstance.showLoading('验证成功，正在进入会议...');
+
+        // 跳转到会议页面
+        setTimeout(() => {
+            window.location.href = 'conference.html';
+        }, 500);
+
+    } catch (error) {
+        console.error('加入会议失败:', error);
+        homePageInstance.showAlert('加入会议失败: ' + error.message, 'error');
+        homePageInstance.hideLoading();
+    }
+}
+
+
 class HomePage {
     constructor() {
         this.form = document.getElementById('joinForm');
@@ -43,51 +92,13 @@ class HomePage {
         const roomName = this.roomNameInput.value.trim();
 
         if (!userName || !roomName) {
-            this.showAlert('请填写所有字段', 'error');
+            this.showAlert('请填写您的昵称和会议室 ID', 'error');
             return;
         }
 
         // 保存用户名到本地存储
         localStorage.setItem('userName', userName);
-
-        this.showLoading('正在获取令牌...');
-
-        try {
-            const response = await fetch('/api/token', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    roomName: roomName,
-                    participantName: userName
-                })
-            });
-
-            if (!response.ok) {
-                throw new Error('获取令牌失败');
-            }
-
-            const data = await response.json();
-            
-            // 将令牌和URL存储到sessionStorage
-            sessionStorage.setItem('livekit_token', data.token);
-            sessionStorage.setItem('livekit_url', data.url);
-            sessionStorage.setItem('room_name', data.roomName);
-            sessionStorage.setItem('participant_name', userName);
-
-            this.showLoading('正在进入会议...');
-
-            // 跳转到会议页面
-            setTimeout(() => {
-                window.location.href = 'conference.html';
-            }, 500);
-
-        } catch (error) {
-            console.error('加入会议失败:', error);
-            this.showAlert('加入会议失败: ' + error.message, 'error');
-            this.hideLoading();
-        }
+        await requestTokenAndRedirect(userName, roomName, this);
     }
 
     handleQuickJoin() {
@@ -105,7 +116,7 @@ class HomePage {
     async handleCreateRoom() {
         const userName = this.userNameInput.value.trim() || 'user-' + Math.random().toString(36).substr(2, 6);
         
-        this.showLoading('正在创建会议室...');
+        this.showLoading('正在创建新的会议室...');
 
         try {
             // 生成唯一的房间名
@@ -123,7 +134,8 @@ class HomePage {
             });
 
             if (!createResponse.ok) {
-                throw new Error('创建房间失败');
+                const errorBody = await createResponse.text();
+                throw new Error(errorBody || '创建房间失败');
             }
 
             // 获取令牌并加入
@@ -131,33 +143,7 @@ class HomePage {
             this.roomNameInput.value = roomName;
             localStorage.setItem('userName', userName);
 
-            const tokenResponse = await fetch('/api/token', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    roomName: roomName,
-                    participantName: userName
-                })
-            });
-
-            if (!tokenResponse.ok) {
-                throw new Error('获取令牌失败');
-            }
-
-            const data = await tokenResponse.json();
-            
-            sessionStorage.setItem('livekit_token', data.token);
-            sessionStorage.setItem('livekit_url', data.url);
-            sessionStorage.setItem('room_name', data.roomName);
-            sessionStorage.setItem('participant_name', userName);
-
-            this.showLoading('正在进入会议...');
-
-            setTimeout(() => {
-                window.location.href = 'conference.html';
-            }, 500);
+            await requestTokenAndRedirect(userName, roomName, this);
 
         } catch (error) {
             console.error('创建会议失败:', error);

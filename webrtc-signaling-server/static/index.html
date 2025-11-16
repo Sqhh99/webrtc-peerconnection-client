@@ -14,21 +14,21 @@
     <link rel="stylesheet" href="css/home.css">
 </head>
 <body class="home-page">
-    <div class="home-wrapper">
+    <div class="home-wrapper" role="main">
         <section class="hero-panel">
             <div class="hero-badge">
                 <i class="bi bi-broadcast"></i>
                 实时互动网络
             </div>
-            <h1>一键开启高清会议</h1>
-            <p>基于 LiveKit 的低延迟音视频方案，支持多端互通、屏幕共享、聊天互动与会议录制，打造沉浸式协作体验。</p>
+            <h1>开启您的高清视频会议</h1>
+            <p>采用 LiveKit 技术的低延迟音视频方案，支持多端互通、屏幕共享、聊天互动与会议录制，打造沉浸式协作体验。</p>
             <div class="hero-highlights">
                 <div>
                     <strong>4K</strong>
                     <span>超清画质</span>
                 </div>
                 <div>
-                    <strong>200ms</strong>
+                    <strong>&lt;200ms</strong>
                     <span>端到端延迟</span>
                 </div>
                 <div>
@@ -41,24 +41,24 @@
         <section class="form-panel">
             <div class="panel-header">
                 <h2>加入或创建会议</h2>
-                <p>填写信息即可立即开会</p>
+                <p>填写信息，即刻加入或创建会议</p>
             </div>
 
             <div id="alert" class="alert"></div>
 
             <form id="joinForm" class="form-card">
                 <div class="input-group">
-                    <label for="userName">您的姓名</label>
+                    <label for="userName">您的昵称</label>
                     <div class="input-field">
                         <i class="bi bi-person"></i>
                         <input type="text" id="userName" placeholder="输入显示名称" required>
                     </div>
                 </div>
                 <div class="input-group">
-                    <label for="roomName">会议室名称</label>
+                    <label for="roomName">会议室 ID</label>
                     <div class="input-field">
                         <i class="bi bi-hash"></i>
-                        <input type="text" id="roomName" placeholder="如 team-sync" required>
+                        <input type="text" id="roomName" placeholder="例如 team-sync" required>
                     </div>
                 </div>
                 <button type="submit" class="btn-primary" id="joinBtn">
@@ -70,11 +70,11 @@
             <div class="quick-actions">
                 <button class="btn-secondary" id="quickJoinBtn">
                     <i class="bi bi-lightning-charge-fill"></i>
-                    快速体验
+                    随机加入
                 </button>
                 <button class="btn-secondary" id="createRoomBtn">
                     <i class="bi bi-plus-circle"></i>
-                    创建新会议
+                    创建私有会议
                 </button>
             </div>
 
@@ -101,6 +101,6 @@
     </div>
 
     <script src="bootstrap-5.3.8-dist/js/bootstrap.bundle.min.js"></script>
-    <script src="js/home.js"></script>
+    <script src="js/home.js" defer></script>
 </body>
 </html>
