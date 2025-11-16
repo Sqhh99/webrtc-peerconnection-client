@@ -2,7 +2,8 @@
 (async function() {
     'use strict';
 
-    console.log('🚀 启动会议应用');
+    console.log('🚀 启动会议应用 v2.0.1');
+    console.log('📅 加载时间:', new Date().toISOString());
 
     // 等待 LiveKit SDK 加载
     let retries = 0;
@@ -39,7 +40,6 @@
         ui.hideLoading();
         ui.setLocalParticipantName(manager.userName);
         ui.updateRoomInfo(manager.roomName, manager.getParticipantCount());
-        ui.updateEmptyState();
         
         console.log('✅ 会议初始化完成');
         

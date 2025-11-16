@@ -52,14 +52,23 @@ class ConferenceManager {
             this.connectedAt = Date.now();
             
             console.log('✅ 成功连接到房间');
+            console.log('📊 房间信息:', {
+                name: this.room.name,
+                sid: this.room.sid,
+                remoteParticipants: this.room.remoteParticipants?.size || 0
+            });
+            
             window.conferenceUI?.setConnectionState('connected');
             window.conferenceUI?.startCallTimer(this.connectedAt);
             
+            // 启用本地媒体（TrackPublished 事件会处理视频附加）
+            await this.enableLocalMedia();
+            
+            // 稍微等待一下，让本地轨道有时间发布
+            await new Promise(resolve => setTimeout(resolve, 300));
+            
             // 同步已存在的远程参与者
             this.syncExistingParticipants();
-            
-            // 启用本地媒体
-            await this.enableLocalMedia();
             
             return true;
         } catch (error) {
@@ -73,15 +82,20 @@ class ConferenceManager {
         
         // 本地轨道发布事件
         this.room.localParticipant.on(ParticipantEvent.TrackPublished, (publication) => {
-            console.log('本地轨道已发布:', publication.kind, publication.source);
+            console.log('📢 本地轨道已发布:', publication.kind, publication.source);
             const track = publication.track;
-            if (!track || !window.conferenceUI) return;
+            if (!track || !window.conferenceUI) {
+                console.warn('  ⚠️ 轨道或UI不存在');
+                return;
+            }
 
             if (publication.source === Track.Source.CAMERA && publication.kind === 'video') {
+                console.log('  → 附加本地摄像头视频');
                 window.conferenceUI.attachLocalVideo(track);
             }
 
             if (publication.source === Track.Source.SCREEN_SHARE) {
+                console.log('  → 附加本地屏幕共享');
                 window.conferenceUI.onLocalScreenShareStarted(track);
             }
         });
@@ -93,10 +107,16 @@ class ConferenceManager {
         });
         
         this.room.on(RoomEvent.ParticipantConnected, (participant) => {
-            console.log('参与者加入:', participant.identity);
+            console.log('👤 ParticipantConnected 事件触发:', participant.identity, 'SID:', participant.sid);
             if (window.conferenceUI) {
                 window.conferenceUI.onParticipantConnected(participant);
             }
+            
+            // 监听参与者的轨道发布事件
+            participant.on('trackPublished', (publication) => {
+                console.log('📢 远程参与者发布了新轨道:', participant.identity, publication.kind, publication.source);
+                // TrackSubscribed 事件会自动处理
+            });
         });
 
         this.room.on(RoomEvent.ParticipantDisconnected, (participant) => {
@@ -109,7 +129,14 @@ class ConferenceManager {
         this.room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
             const isScreenShare = publication?.source === Track.Source.SCREEN_SHARE;
             const isScreenShareAudio = publication?.source === Track.Source.SCREEN_SHARE_AUDIO;
-            console.log('订阅轨道:', track.kind, 'from', participant.identity, 'source:', publication?.source);
+            console.log('🎬 TrackSubscribed 事件触发:', {
+                participant: participant.identity,
+                kind: track.kind,
+                source: publication?.source,
+                isScreenShare,
+                isScreenShareAudio,
+                trackSid: publication?.trackSid
+            });
             if (window.conferenceUI) {
                 window.conferenceUI.onTrackSubscribed(track, participant, {
                     isScreenShare,
@@ -169,50 +196,84 @@ class ConferenceManager {
         const { Track } = window.LivekitClient;
         const participants = this.getRemoteParticipantList();
 
-        console.log('同步已存在的参与者，数量:', participants.length);
+        console.log('\n🔄 === 开始同步已存在的参与者 ===');
+        console.log('📊 远程参与者数量:', participants.length);
 
-        participants.forEach((participant) => {
-            console.log('添加已存在的参与者:', participant.identity);
+        if (participants.length === 0) {
+            console.log('✅ 没有已存在的参与者，显示空状态');
+            // 只有自己时才显示空状态
+            window.conferenceUI?.updateEmptyState();
+            console.log('=== 同步完成 ===\n');
+            return;
+        }
+
+        console.log(`📢 发现 ${participants.length} 个已存在的参与者，准备同步`);
+
+        // 第一步：为所有参与者创建UI
+        participants.forEach((participant, index) => {
+            console.log(`\n👤 [${index + 1}/${participants.length}] 处理参与者:`, participant.identity);
+            console.log('  SID:', participant.sid);
+            console.log('  视频轨道数:', participant.videoTracks?.size || 0);
+            console.log('  音频轨道数:', participant.audioTracks?.size || 0);
+            
+            // 创建UI（这会将参与者添加到 remoteParticipants Map）
             window.conferenceUI?.onParticipantConnected(participant);
 
-            participant.videoTracks?.forEach((publication) => {
-                if (publication.track) {
-                    window.conferenceUI?.onTrackSubscribed(publication.track, participant, {
-                        isScreenShare: publication.source === Track.Source.SCREEN_SHARE
-                    });
-                }
-            });
-
-            participant.audioTracks?.forEach((publication) => {
-                if (publication.track) {
-                    window.conferenceUI?.onTrackSubscribed(publication.track, participant, {
-                        isScreenShareAudio: publication.source === Track.Source.SCREEN_SHARE_AUDIO
-                    });
-                }
+            // 监听后续轨道发布
+            participant.on('trackPublished', (publication) => {
+                console.log('📢 参与者发布新轨道:', participant.identity, publication.kind);
             });
         });
 
+        // 第二步：更新计数和状态（此时 remoteParticipants.size 应该 > 0）
+        console.log('\n📊 更新UI状态');
         window.conferenceUI?.updateParticipantCount();
+        window.conferenceUI?.updateEmptyState(); // 应该隐藏空状态
+
+        // 第三步：附加已有的轨道
+        console.log('\n🎬 === 开始附加已有轨道 ===');
+        participants.forEach((participant) => {
+            // 处理视频轨道
+            if (participant.videoTracks && participant.videoTracks.size > 0) {
+                participant.videoTracks.forEach((publication) => {
+                    const track = publication.track;
+                    if (track) {
+                        const isScreenShare = publication.source === Track.Source.SCREEN_SHARE;
+                        console.log(`  🎥 附加 ${participant.identity} 的${isScreenShare ? '屏幕共享' : '视频'}`);
+                        window.conferenceUI?.onTrackSubscribed(track, participant, { isScreenShare });
+                    } else {
+                        console.log(`  ⏳ ${participant.identity} 的视频轨道未就绪，等待 TrackSubscribed 事件`);
+                    }
+                });
+            }
+
+            // 处理音频轨道
+            if (participant.audioTracks && participant.audioTracks.size > 0) {
+                participant.audioTracks.forEach((publication) => {
+                    const track = publication.track;
+                    if (track) {
+                        const isScreenShareAudio = publication.source === Track.Source.SCREEN_SHARE_AUDIO;
+                        console.log(`  🔊 附加 ${participant.identity} 的音频`);
+                        window.conferenceUI?.onTrackSubscribed(track, participant, { isScreenShareAudio });
+                    } else {
+                        console.log(`  ⏳ ${participant.identity} 的音频轨道未就绪，等待 TrackSubscribed 事件`);
+                    }
+                });
+            }
+        });
+
+        console.log('✅ === 同步完成 ===\n');
     }
 
     async enableLocalMedia() {
         try {
+            console.log('🎥 启用本地媒体...');
+            
+            // 启用摄像头和麦克风（TrackPublished 事件会自动处理附加）
             await this.room.localParticipant.setCameraEnabled(true);
             await this.room.localParticipant.setMicrophoneEnabled(true);
             
-            // 等待轨道发布完成
-            await new Promise(resolve => setTimeout(resolve, 500));
-            
-            // 获取本地视频轨道
-            if (this.room.localParticipant.videoTracks && this.room.localParticipant.videoTracks.size > 0) {
-                const videoPublication = Array.from(this.room.localParticipant.videoTracks.values())[0];
-                const videoTrack = videoPublication?.track;
-                if (videoTrack && window.conferenceUI) {
-                    window.conferenceUI.attachLocalVideo(videoTrack);
-                }
-            }
-            
-            console.log('✅ 本地媒体已启用');
+            console.log('✅ 本地媒体已启用（等待轨道发布事件）');
         } catch (error) {
             console.error('❌ 启用媒体失败:', error);
             throw error;

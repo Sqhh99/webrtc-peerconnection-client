@@ -362,12 +362,14 @@ class ConferenceUI {
         const participantsBtn = document.getElementById('participantsBtn');
         const badge = participantsBtn?.querySelector('.badge');
         if (badge) {
-            badge.style.display = participantCount > 0 ? 'inline-block' : 'none';
+            badge.style.display = participantCount > 1 ? 'inline-block' : 'none';
             badge.textContent = participantCount;
         }
 
         const safeName = roomName || '视频会议';
         document.title = `LiveKit · ${safeName} (${participantCount}人)`;
+
+        console.log('📊 更新房间信息:', { roomName, participantCount });
 
         // 更新参与者列表（如果打开）
         if (this.elements.participantsSidebar?.classList.contains('active')) {
@@ -376,12 +378,27 @@ class ConferenceUI {
     }
 
     updateEmptyState() {
-        const totalParticipants = this.remoteParticipants.size + 1;
+        const remoteCount = this.remoteParticipants.size;
         const hasScreenShare = this.screenShareTiles.size > 0 || !!this.localScreenShareElement;
+        
+        // 关键修复：只要有远程参与者，或者有屏幕共享，就隐藏空状态
+        // 即使只有1个人在会议中也不显示空状态（因为至少有自己）
+        const shouldShowEmpty = (remoteCount === 0 && !hasScreenShare);
+        
+        console.log('📊 updateEmptyState:', {
+            remoteParticipants: remoteCount,
+            hasScreenShare: hasScreenShare,
+            shouldShowEmpty: shouldShowEmpty,
+            currentDisplay: this.elements.emptyState?.style.display
+        });
+        
         if (this.elements.emptyState) {
-            this.elements.emptyState.style.display = (totalParticipants <= 1 && !hasScreenShare) ? 'flex' : 'none';
+            const newDisplay = shouldShowEmpty ? 'flex' : 'none';
+            this.elements.emptyState.style.display = newDisplay;
+            console.log(`  → 空状态设置为: ${newDisplay}`);
+        } else {
+            console.warn('  ⚠️ emptyState 元素不存在！');
         }
-        console.log('更新空状态显示，参与者数量:', totalParticipants, '屏幕共享:', hasScreenShare);
     }
 
     attachLocalVideo(track) {
@@ -392,10 +409,13 @@ class ConferenceUI {
     }
 
     onParticipantConnected(participant) {
-        console.log('UI: 添加参与者', participant.identity);
+        console.log('🎉 onParticipantConnected:', participant.identity, 'SID:', participant.sid);
         this.addParticipant(participant);
+        
+        // 立即更新UI和状态
         this.updateParticipantCount();
-        this.updateEmptyState();
+        this.updateEmptyState(); // 有人加入，立即隐藏空状态
+        
         this.showToast(`${participant.identity} 加入了会议`, 'info');
     }
 
@@ -409,28 +429,61 @@ class ConferenceUI {
     }
 
     onTrackSubscribed(track, participant, options = {}) {
-        if (!track || !participant) return;
+        if (!track || !participant) {
+            console.warn('⚠️ onTrackSubscribed: track 或 participant 为空');
+            return;
+        }
+
+        console.log('📹 onTrackSubscribed 被调用:', {
+            participant: participant.identity,
+            sid: participant.sid,
+            kind: track.kind,
+            source: track.source,
+            isScreenShare: options.isScreenShare,
+            trackSid: track.sid
+        });
 
         if (track.kind === 'video') {
             if (options.isScreenShare) {
+                console.log('  → 附加屏幕共享视频');
                 this.attachScreenShareTrack(track, participant);
+                this.updateEmptyState();
                 return;
             }
 
-            const element = this.remoteParticipants.get(participant.sid);
+            // 检查参与者UI是否存在，如果不存在则先创建
+            let element = this.remoteParticipants.get(participant.sid);
+            if (!element) {
+                console.warn('  ⚠️ 参与者 tile 不存在，先创建 UI');
+                this.addParticipant(participant);
+                element = this.remoteParticipants.get(participant.sid);
+            }
+
             if (element) {
                 const video = element.querySelector('video');
                 if (video) {
                     track.attach(video);
-                    console.log('✅ 远程视频已附加:', participant.identity);
+                    console.log('  ✅ 视频已附加到 DOM');
+                    // 视频附加后立即隐藏空状态
+                    this.updateEmptyState();
+                } else {
+                    console.error('  ❌ 找不到 video 元素');
                 }
+            } else {
+                console.error('  ❌ 无法创建参与者 tile');
             }
         } else if (track.kind === 'audio') {
-            const audioElement = document.createElement('audio');
-            audioElement.autoplay = true;
-            audioElement.id = `audio-${participant.sid}${options.isScreenShareAudio ? '-screen' : ''}`;
-            track.attach(audioElement);
-            document.body.appendChild(audioElement);
+            const audioId = `audio-${participant.sid}${options.isScreenShareAudio ? '-screen' : ''}`;
+            if (!document.getElementById(audioId)) {
+                const audioElement = document.createElement('audio');
+                audioElement.autoplay = true;
+                audioElement.id = audioId;
+                track.attach(audioElement);
+                document.body.appendChild(audioElement);
+                console.log('  ✅ 音频已附加');
+            } else {
+                console.log('  ℹ️ 音频元素已存在');
+            }
         }
     }
 
@@ -495,7 +548,12 @@ class ConferenceUI {
     }
 
     addParticipant(participant) {
-        if (this.remoteParticipants.has(participant.sid)) return;
+        if (this.remoteParticipants.has(participant.sid)) {
+            console.log('  ⚠️ 参与者已存在，跳过:', participant.identity, participant.sid);
+            return;
+        }
+
+        console.log('  ➕ 创建参与者 tile:', participant.identity, 'SID:', participant.sid);
 
         const tile = document.createElement('div');
         tile.className = 'video-tile';
@@ -510,32 +568,13 @@ class ConferenceUI {
             </div>
         `;
 
+        // 先添加到 Map 和 DOM
         this.remoteParticipants.set(participant.sid, tile);
         this.elements.videoGrid.appendChild(tile);
+        console.log('  ✅ Tile 已添加，当前远程参与者数:', this.remoteParticipants.size);
 
-        if (participant.videoTracks && participant.videoTracks.size > 0) {
-            participant.videoTracks.forEach((publication) => {
-                if (!publication.track) return;
-                if (publication.source === this.screenShareSource) {
-                    this.attachScreenShareTrack(publication.track, participant);
-                } else {
-                    const video = tile.querySelector('video');
-                    publication.track.attach(video);
-                }
-            });
-        }
-
-        if (participant.audioTracks && participant.audioTracks.size > 0) {
-            participant.audioTracks.forEach((publication) => {
-                if (publication.track) {
-                    const audioElement = document.createElement('audio');
-                    audioElement.autoplay = true;
-                    audioElement.id = `audio-${participant.sid}`;
-                    publication.track.attach(audioElement);
-                    document.body.appendChild(audioElement);
-                }
-            });
-        }
+        // 注意：不在这里处理轨道，由 onTrackSubscribed 统一处理
+        // 这样避免重复附加轨道
 
         // 监听麦克风状态变化
         participant.on('trackMuted', (publication) => {
@@ -655,7 +694,11 @@ class ConferenceUI {
     updateParticipantCount() {
         const manager = window.conferenceManager;
         const count = manager ? manager.getParticipantCount() : (this.remoteParticipants.size + 1);
-        this.updateRoomInfo(this.elements.roomName.textContent, count);
+        console.log('📊 updateParticipantCount:', {
+            remoteParticipants: this.remoteParticipants.size,
+            totalCount: count
+        });
+        this.updateRoomInfo(this.elements.roomName?.textContent || '', count);
     }
 
     updateButtonState(buttonId, active) {

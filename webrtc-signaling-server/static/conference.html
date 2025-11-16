@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>LiveKit 视频会议</title>
+    <!-- Version: 2.0.1 - Fix participant sync -->
     
     <!-- Bootstrap CSS -->
     <link href="bootstrap-5.3.8-dist/css/bootstrap.min.css" rel="stylesheet">
@@ -63,13 +64,13 @@
             <!-- 远程参与者视频将动态添加到这里 -->
         </div>
 
-        <!-- 空状态提示 -->
-        <div id="emptyState" class="empty-state">
+        <!-- 空状态提示 - 初始隐藏 -->
+        <div id="emptyState" class="empty-state" style="display: none;">
             <div class="empty-icon">
                 <i class="bi bi-people"></i>
             </div>
             <h3>等待其他人加入...</h3>
-            <p>分享会议链接邀请他人加入</p>
+            <p>点击底部"分享链接"按钮邀请他人加入</p>
         </div>
     </div>
 
@@ -234,9 +235,13 @@
     
     <!-- Bootstrap JS -->
     <script src="bootstrap-5.3.8-dist/js/bootstrap.bundle.min.js"></script>
-    <!-- 应用脚本 -->
-    <script src="js/conference-manager.js"></script>
-    <script src="js/conference-ui.js"></script>
-    <script src="js/conference-app.js"></script>
+    <!-- 应用脚本 - 强制清除缓存 -->
+    <script>
+        const timestamp = Date.now();
+        console.log('🔄 强制加载最新脚本，时间戳:', timestamp);
+    </script>
+    <script src="js/conference-manager.js?v=20251116180000"></script>
+    <script src="js/conference-ui.js?v=20251116180000"></script>
+    <script src="js/conference-app.js?v=20251116180000"></script>
 </body>
 </html>
