@@ -11,6 +11,7 @@ class ConferenceManager {
         this.isScreenSharing = false;
         this.connectedAt = null;
         this.typingState = false;
+        this.cameraStateBeforeScreenShare = null; // 记录屏幕共享前的摄像头状态
     }
 
     async initialize() {
@@ -384,45 +385,55 @@ class ConferenceManager {
                 console.log('  → 调用 onLocalScreenShareStopped');
                 window.conferenceUI?.onLocalScreenShareStopped();
                 
-                // 确保摄像头处于启用状态
-                const isCameraEnabled = this.room.localParticipant.isCameraEnabled;
-                console.log('  → 摄像头状态:', isCameraEnabled);
+                // 检查当前摄像头的实际状态(而不是使用保存的状态)
+                // 这样可以尊重用户在共享屏幕期间手动开关摄像头的操作
+                const isCameraCurrentlyEnabled = this.room.localParticipant.isCameraEnabled;
+                console.log('  → 当前摄像头状态:', isCameraCurrentlyEnabled);
                 
-                if (!isCameraEnabled) {
-                    console.log('  → 摄像头已禁用，重新启用');
-                    await this.room.localParticipant.setCameraEnabled(true);
+                // 只有在摄像头当前是开启的,才恢复摄像头显示
+                if (isCameraCurrentlyEnabled) {
+                    console.log('  → 摄像头是开启的,恢复摄像头显示');
+                    
+                    // 使用重试机制确保摄像头轨道恢复显示
+                    const restoreCamera = (attempt = 1, maxAttempts = 5) => {
+                        setTimeout(() => {
+                            console.log(`  → 第 ${attempt} 次尝试恢复摄像头显示`);
+                            const cameraTrack = this.findLocalCameraTrack();
+                            
+                            if (cameraTrack) {
+                                console.log('  ✓ 找到摄像头轨道，恢复显示');
+                                window.conferenceUI?.attachLocalVideo(cameraTrack);
+                            } else if (attempt < maxAttempts) {
+                                console.log(`  → 未找到摄像头轨道，${200}ms 后重试`);
+                                restoreCamera(attempt + 1, maxAttempts);
+                            } else {
+                                console.warn('  ⚠️ 多次尝试后仍未找到摄像头轨道，强制重新启用');
+                                // 最后尝试：强制重新启用摄像头
+                                this.room.localParticipant.setCameraEnabled(false).then(() => {
+                                    return this.room.localParticipant.setCameraEnabled(true);
+                                }).then((publication) => {
+                                    console.log('  ✓ 摄像头强制重新启用成功');
+                                    this.attachLocalCameraTrack(publication);
+                                }).catch(err => {
+                                    console.error('  ✗ 摄像头强制重新启用失败:', err);
+                                });
+                            }
+                        }, attempt === 1 ? 300 : 200);
+                    };
+                    
+                    restoreCamera();
+                } else {
+                    console.log('  → 摄像头是关闭的,不恢复摄像头显示');
                 }
                 
-                // 使用重试机制确保摄像头轨道恢复
-                const restoreCamera = (attempt = 1, maxAttempts = 5) => {
-                    setTimeout(() => {
-                        console.log(`  → 第 ${attempt} 次尝试恢复摄像头`);
-                        const cameraTrack = this.findLocalCameraTrack();
-                        
-                        if (cameraTrack) {
-                            console.log('  ✓ 找到摄像头轨道，恢复显示');
-                            window.conferenceUI?.attachLocalVideo(cameraTrack);
-                        } else if (attempt < maxAttempts) {
-                            console.log(`  → 未找到摄像头轨道，${200}ms 后重试`);
-                            restoreCamera(attempt + 1, maxAttempts);
-                        } else {
-                            console.warn('  ⚠️ 多次尝试后仍未找到摄像头轨道，强制重新启用');
-                            // 最后尝试：强制重新启用摄像头
-                            this.room.localParticipant.setCameraEnabled(false).then(() => {
-                                return this.room.localParticipant.setCameraEnabled(true);
-                            }).then((publication) => {
-                                console.log('  ✓ 摄像头强制重新启用成功');
-                                this.attachLocalCameraTrack(publication);
-                            }).catch(err => {
-                                console.error('  ✗ 摄像头强制重新启用失败:', err);
-                            });
-                        }
-                    }, attempt === 1 ? 300 : 200);
-                };
-                
-                restoreCamera();
+                // 清除保存的状态
+                this.cameraStateBeforeScreenShare = null;
             } else {
                 console.log('🖥️ 开启屏幕共享');
+                // 保存当前摄像头状态
+                this.cameraStateBeforeScreenShare = this.room.localParticipant.isCameraEnabled;
+                console.log('  → 保存摄像头状态:', this.cameraStateBeforeScreenShare);
+                
                 const sharePublication = await this.room.localParticipant.setScreenShareEnabled(true);
                 this.isScreenSharing = true;
                 this.attachLocalScreenShareTrack(sharePublication);
@@ -431,6 +442,7 @@ class ConferenceManager {
         } catch (error) {
             console.error('屏幕共享失败:', error);
             this.isScreenSharing = false;
+            this.cameraStateBeforeScreenShare = null;
             throw error;
         }
     }

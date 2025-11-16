@@ -1054,18 +1054,27 @@ class ConferenceUI {
             return false;
         }
 
-        let track = this.remoteCameraTracks.get(sid);
-        if (!track) {
-            track = this.getCameraTrackFromRoom(sid);
-            if (track) {
-                this.remoteCameraTracks.set(sid, track);
-            }
-        }
+        // 优先检查是否有屏幕共享轨道,如果有则显示屏幕共享
+        let track = null;
         let isScreenShare = false;
-        if (!track && this.remoteShareTracks.has(sid)) {
+        
+        if (this.remoteShareTracks.has(sid)) {
+            console.log('🖥️ setStageToSid: 该参与者正在共享屏幕, sid:', sid);
             track = this.remoteShareTracks.get(sid);
             isScreenShare = true;
+        } else {
+            // 没有屏幕共享,则显示摄像头画面
+            console.log('📹 setStageToSid: 显示摄像头画面, sid:', sid);
+            track = this.remoteCameraTracks.get(sid);
+            if (!track) {
+                track = this.getCameraTrackFromRoom(sid);
+                if (track) {
+                    this.remoteCameraTracks.set(sid, track);
+                }
+            }
+            isScreenShare = false;
         }
+        
         if (!track) {
             const fallbackVideo = this.getTileVideoElement(sid);
             if (fallbackVideo && this.attachVideoElementToStage(fallbackVideo)) {
