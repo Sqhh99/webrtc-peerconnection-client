@@ -520,26 +520,49 @@ class ConferenceUI {
     }
 
     attachLocalVideo(track) {
+        console.log('📹 attachLocalVideo 被调用, track:', !!track);
         if (!track) return;
+        
         this.localCameraTrack = track;
+        console.log('  → 保存到 localCameraTrack');
+        console.log('  → 当前 localScreenShareTrack:', !!this.localScreenShareTrack);
+        
+        // 只有在没有屏幕共享时才更新本地预览
         if (!this.localScreenShareTrack) {
+            console.log('  → 没有屏幕共享，更新本地预览');
             this.setLocalPreviewTrack(track);
-        }
-        if (this.userPinnedSid === 'local' || this.stageParticipantSid === 'local') {
-            this.setStageTrack(track, {
-                sid: 'local',
-                identity: this.elements.localName?.textContent || '我'
-            });
+            // 如果舞台正在显示本地画面且不是屏幕共享，更新舞台
+            if ((this.userPinnedSid === 'local' || this.stageParticipantSid === 'local') && !this.stageIsScreenShare) {
+                console.log('  → 更新舞台画面');
+                this.setStageTrack(track, {
+                    sid: 'local',
+                    identity: this.elements.localName?.textContent || '我'
+                }, { isScreenShare: false });
+            }
+        } else {
+            console.log('  → 有屏幕共享，跳过更新本地预览');
         }
     }
 
     setLocalPreviewTrack(track) {
-        if (!this.elements.localVideo || !track) return;
+        console.log('🎬 setLocalPreviewTrack 被调用');
+        if (!this.elements.localVideo || !track) {
+            console.warn('  ⚠️ localVideo 元素或 track 不存在');
+            return;
+        }
+        
+        console.log('  → 当前预览轨道:', !!this.currentLocalPreviewTrack);
+        console.log('  → 新轨道与当前轨道相同:', this.currentLocalPreviewTrack === track);
+        
         if (this.currentLocalPreviewTrack && this.currentLocalPreviewTrack !== track) {
+            console.log('  → 分离旧轨道');
             this.currentLocalPreviewTrack.detach(this.elements.localVideo);
         }
+        
+        console.log('  → 附加新轨道到 localVideo 元素');
         track.attach(this.elements.localVideo);
         this.currentLocalPreviewTrack = track;
+        console.log('  ✓ 本地预览轨道已更新');
     }
 
     restoreLocalPreview() {
@@ -634,7 +657,8 @@ class ConferenceUI {
         if (track.kind === 'video') {
             this.remoteCameraTracks.delete(participant.sid);
             this.detachTrackFromTile(participant.sid);
-            if (this.stageParticipantSid === participant.sid && !this.stageForcedByShare) {
+            // 如果舞台正在显示该参与者的摄像头（非屏幕共享）
+            if (this.stageParticipantSid === participant.sid && !this.stageIsScreenShare) {
                 this.stageTrack?.detach(this.elements.stageVideo);
                 this.stageTrack = null;
                 this.stageParticipantSid = null;
@@ -771,17 +795,28 @@ class ConferenceUI {
     }
 
     previewLocalOnStage() {
-        if (!this.localCameraTrack) {
-            this.showToast('摄像头未开启', 'warning');
+        // 优先使用屏幕共享轨道，如果没有则使用摄像头轨道
+        const trackToShow = this.localScreenShareTrack || this.localCameraTrack;
+        const isScreenShare = !!this.localScreenShareTrack;
+        
+        if (!trackToShow) {
+            this.showToast(isScreenShare ? '屏幕共享未开启' : '摄像头未开启', 'warning');
             return;
         }
+        
         this.userPinnedSid = 'local';
-        this.stageForcedByShare = null;
+        // 如果是屏幕共享，保持 stageForcedByShare 状态
+        if (isScreenShare) {
+            this.stageForcedByShare = 'local';
+        } else {
+            this.stageForcedByShare = null;
+        }
+        
         this.setPinnedTile('local');
-        this.setStageTrack(this.localCameraTrack, {
+        this.setStageTrack(trackToShow, {
             sid: 'local',
             identity: this.elements.localName?.textContent || '我'
-        });
+        }, { isScreenShare });
     }
 
     updateAudioIndicator(sid, enabled) {
@@ -833,42 +868,89 @@ class ConferenceUI {
 
     removeScreenShare(participantSid) {
         this.remoteShareTracks.delete(participantSid);
+        const wasShowingThisShare = this.stageParticipantSid === participantSid && this.stageIsScreenShare;
+        
         if (this.stageForcedByShare === participantSid) {
             this.stageForcedByShare = null;
-            this.maybeAutoSelectStage('share-ended');
         }
+        
+        // 如果舞台正在显示这个屏幕共享，尝试切换回该参与者的摄像头
+        if (wasShowingThisShare) {
+            const cameraTrack = this.remoteCameraTracks.get(participantSid);
+            if (cameraTrack) {
+                // 切换回该参与者的摄像头
+                this.setStageTrack(cameraTrack, {
+                    sid: participantSid,
+                    identity: this.participantNames.get(participantSid) || '参会者'
+                }, { isScreenShare: false });
+                this.showToast('屏幕共享已结束，切换至摄像头', 'info');
+            } else {
+                // 没有摄像头，选择其他画面
+                this.maybeAutoSelectStage('share-ended');
+                this.showToast('屏幕共享已结束', 'info');
+            }
+        }
+        
         this.updateScreenShareIndicator();
         this.updateEmptyState();
-        this.showToast('屏幕共享已结束', 'info');
     }
 
     onLocalScreenShareStarted(track) {
-        if (!track) return;
+        console.log('🖥️ onLocalScreenShareStarted 被调用, track:', !!track);
+        if (!track) {
+            console.warn('  ⚠️ track 不存在');
+            return;
+        }
+        
+        console.log('  → 保存屏幕共享轨道');
         this.localScreenShareTrack = track;
+        
+        console.log('  → 更新本地预览为屏幕共享');
         this.setLocalPreviewTrack(track);
+        
+        console.log('  → 设置 stageForcedByShare = local');
         this.stageForcedByShare = 'local';
+        
+        console.log('  → 更新舞台为屏幕共享');
         this.setStageTrack(track, {
             sid: 'local',
             identity: this.elements.localName?.textContent || '我'
         }, { isScreenShare: true });
+        
         this.updateScreenShareIndicator();
         this.showToast('屏幕共享已开启', 'success');
         this.updateEmptyState();
+        console.log('  ✓ 屏幕共享启动完成');
     }
 
     onLocalScreenShareStopped() {
+        console.log('🛑 onLocalScreenShareStopped 被调用');
         const restoreLocalStage = this.stageParticipantSid === 'local' || this.userPinnedSid === 'local';
         this.localScreenShareTrack = null;
         if (this.stageForcedByShare === 'local') {
             this.stageForcedByShare = null;
         }
-        this.restoreLocalPreview();
+        
+        console.log('  → 当前 localCameraTrack:', !!this.localCameraTrack);
+        console.log('  → 需要恢复舞台:', restoreLocalStage);
+        
+        // 立即恢复本地预览为摄像头
+        if (this.localCameraTrack) {
+            console.log('  → 恢复本地预览为摄像头');
+            this.setLocalPreviewTrack(this.localCameraTrack);
+        } else {
+            console.warn('  ⚠️ localCameraTrack 不存在，无法恢复预览');
+        }
+        
+        // 如果舞台正在显示本地画面，也更新舞台
         if (restoreLocalStage && this.localCameraTrack) {
+            console.log('  → 更新舞台为摄像头');
             this.setStageTrack(this.localCameraTrack, {
                 sid: 'local',
                 identity: this.elements.localName?.textContent || '我'
-            });
+            }, { isScreenShare: false });
         } else {
+            console.log('  → 调用 maybeAutoSelectStage');
             this.maybeAutoSelectStage('local-share-stop');
         }
         this.updateScreenShareIndicator();

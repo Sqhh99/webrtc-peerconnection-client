@@ -109,6 +109,8 @@ body.conference-page {
     flex-direction: column;
     padding: 16px 24px;
     gap: 12px;
+    height: 100vh;
+    overflow: hidden;
 }
 
 .stage-bar,
@@ -134,6 +136,8 @@ body.conference-page {
     border-radius: 12px;
     overflow: hidden;
     background: #000;
+    max-height: calc(100vh - 220px);
+    min-height: 400px;
 }
 
 .stage-view video {

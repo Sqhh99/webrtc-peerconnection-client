@@ -83,28 +83,75 @@ class ConferenceManager {
         
         // 本地轨道发布事件
         this.room.localParticipant.on(ParticipantEvent.TrackPublished, (publication) => {
-            console.log('📢 本地轨道已发布:', publication.kind, publication.source);
+            console.log('📢 本地轨道已发布:', {
+                kind: publication.kind,
+                source: publication.source,
+                trackName: publication.trackName,
+                trackSid: publication.trackSid
+            });
+            
             if (!window.conferenceUI) {
                 console.warn('  ⚠️ UI 不存在，无法附加轨道');
                 return;
             }
 
-            if (publication.source === Track.Source.CAMERA && publication.kind === 'video') {
-                console.log('  → 附加本地摄像头视频');
-                this.attachLocalCameraTrack(publication);
-                return;
-            }
-
-            if (publication.source === Track.Source.SCREEN_SHARE) {
-                console.log('  → 附加本地屏幕共享');
-                this.attachLocalScreenShareTrack(publication);
+            if (publication.kind === 'video') {
+                if (publication.source === Track.Source.CAMERA) {
+                    console.log('  → 附加本地摄像头视频');
+                    this.attachLocalCameraTrack(publication);
+                } else if (publication.source === Track.Source.SCREEN_SHARE) {
+                    console.log('  → 附加本地屏幕共享');
+                    this.attachLocalScreenShareTrack(publication);
+                } else {
+                    console.log('  → 未知 source:', publication.source, '，尝试判断');
+                    // 如果 source 为 undefined，可能是摄像头
+                    if (!publication.source || publication.source === 'unknown') {
+                        console.log('  → 假设为摄像头');
+                        this.attachLocalCameraTrack(publication);
+                    }
+                }
             }
         });
 
         this.room.localParticipant.on(ParticipantEvent.TrackUnpublished, (publication) => {
-            if (publication.source === Track.Source.SCREEN_SHARE) {
+            console.log('📢 本地轨道取消发布:', {
+                kind: publication.kind,
+                source: publication.source,
+                trackName: publication.trackName,
+                trackSid: publication.trackSid
+            });
+            
+            if (publication.kind === 'video' && publication.source === Track.Source.SCREEN_SHARE) {
+                console.log('  → 屏幕共享已停止，尝试恢复摄像头显示');
                 window.conferenceUI?.onLocalScreenShareStopped();
+                
+                // 确保摄像头轨道被重新附加
+                setTimeout(() => {
+                    const cameraTrack = this.findLocalCameraTrack();
+                    if (cameraTrack) {
+                        console.log('  → 找到摄像头轨道，重新附加');
+                        window.conferenceUI?.attachLocalVideo(cameraTrack);
+                    } else {
+                        console.warn('  ⚠️ 未找到摄像头轨道');
+                        // 尝试查看所有本地轨道
+                        console.log('  → 当前本地视频轨道:', this.room.localParticipant.videoTracks.size);
+                    }
+                }, 100);
             }
+        });
+        
+        // 额外监听 LocalTrackUnpublished 事件（可能是不同的事件名）
+        this.room.localParticipant.on('localTrackUnpublished', (publication) => {
+            console.log('📢 [localTrackUnpublished] 本地轨道取消发布:', publication.kind, publication.source);
+        });
+        
+        // 监听轨道停止事件
+        this.room.localParticipant.on('trackUnmuted', (publication) => {
+            console.log('📢 [trackUnmuted] 轨道取消静音:', publication.kind, publication.source);
+        });
+        
+        this.room.localParticipant.on('trackMuted', (publication) => {
+            console.log('📢 [trackMuted] 轨道静音:', publication.kind, publication.source);
         });
         
         this.room.on(RoomEvent.ParticipantConnected, (participant) => {
@@ -297,10 +344,20 @@ class ConferenceManager {
         if (!this.room) return false;
         const enabled = this.room.localParticipant.isCameraEnabled;
         const newState = !enabled;
+        console.log(`🎥 切换摄像头: ${enabled} -> ${newState}`);
+        
         const publication = await this.room.localParticipant.setCameraEnabled(newState);
+        
         if (newState) {
-            this.attachLocalCameraTrack(publication);
+            console.log('  → 摄像头已开启，附加轨道');
+            // 等待一下让轨道就绪
+            setTimeout(() => {
+                this.attachLocalCameraTrack(publication);
+            }, 100);
+        } else {
+            console.log('  → 摄像头已关闭');
         }
+        
         return newState;
     }
 
@@ -309,9 +366,26 @@ class ConferenceManager {
         
         try {
             if (this.isScreenSharing) {
+                console.log('🛑 停止屏幕共享');
                 await this.room.localParticipant.setScreenShareEnabled(false);
                 this.isScreenSharing = false;
+                
+                // 立即触发 UI 更新
+                console.log('  → 调用 onLocalScreenShareStopped');
+                window.conferenceUI?.onLocalScreenShareStopped();
+                
+                // 恢复摄像头显示
+                setTimeout(() => {
+                    const cameraTrack = this.findLocalCameraTrack();
+                    if (cameraTrack) {
+                        console.log('  → 恢复摄像头显示');
+                        window.conferenceUI?.attachLocalVideo(cameraTrack);
+                    } else {
+                        console.warn('  ⚠️ 未找到摄像头轨道');
+                    }
+                }, 100);
             } else {
+                console.log('🖥️ 开启屏幕共享');
                 const sharePublication = await this.room.localParticipant.setScreenShareEnabled(true);
                 this.isScreenSharing = true;
                 this.attachLocalScreenShareTrack(sharePublication);
@@ -319,6 +393,7 @@ class ConferenceManager {
             return this.isScreenSharing;
         } catch (error) {
             console.error('屏幕共享失败:', error);
+            this.isScreenSharing = false;
             throw error;
         }
     }
@@ -403,12 +478,15 @@ class ConferenceManager {
     }
 
     attachLocalCameraTrack(publication) {
+        console.log('🔧 attachLocalCameraTrack 被调用');
         if (!window.conferenceUI) {
+            console.warn('  ⚠️ UI 不存在');
             return;
         }
 
         const track = this.findLocalCameraTrack(publication);
         if (track) {
+            console.log('  ✓ 找到摄像头轨道，附加到 UI');
             window.conferenceUI.attachLocalVideo(track);
             return;
         }
@@ -417,7 +495,10 @@ class ConferenceManager {
         setTimeout(() => {
             const retryTrack = this.findLocalCameraTrack();
             if (retryTrack) {
+                console.log('  ✓ 重试成功，附加摄像头轨道');
                 window.conferenceUI.attachLocalVideo(retryTrack);
+            } else {
+                console.error('  ✗ 重试失败，仍未找到摄像头轨道');
             }
         }, 300);
     }
@@ -440,33 +521,46 @@ class ConferenceManager {
 
         const TrackSource = window.LivekitClient?.Track?.Source;
 
+        let fallbackTrack = null;
         for (const pub of publications) {
             if (!pub || !pub.track) continue;
+            const source = pub.source ?? pub.kind;
             const isCameraSource = TrackSource
-                ? pub.source === TrackSource.CAMERA
-                : pub.kind === 'video';
+                ? source === TrackSource.CAMERA || source === undefined
+                : source !== TrackSource?.SCREEN_SHARE;
             if (isCameraSource) {
                 return pub.track;
             }
+            if (!pub.source && pub.track.kind === 'video') {
+                fallbackTrack = pub.track;
+            }
         }
+        if (fallbackTrack) return fallbackTrack;
         return null;
     }
 
     attachLocalScreenShareTrack(publication) {
+        console.log('🔧 attachLocalScreenShareTrack 被调用');
         if (!window.conferenceUI) {
+            console.warn('  ⚠️ UI 不存在');
             return;
         }
 
         const track = this.findLocalScreenShareTrack(publication);
         if (track) {
+            console.log('  ✓ 找到屏幕共享轨道，附加到 UI');
             window.conferenceUI.onLocalScreenShareStarted(track);
             return;
         }
 
+        console.warn('  ⚠️ 屏幕共享轨道尚未就绪，稍后重试附加');
         setTimeout(() => {
             const retryTrack = this.findLocalScreenShareTrack();
             if (retryTrack) {
+                console.log('  ✓ 重试成功，附加屏幕共享轨道');
                 window.conferenceUI.onLocalScreenShareStarted(retryTrack);
+            } else {
+                console.error('  ✗ 重试失败，仍未找到屏幕共享轨道');
             }
         }, 300);
     }
