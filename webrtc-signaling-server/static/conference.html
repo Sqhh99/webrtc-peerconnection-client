@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>LiveKit 视频会议</title>
+    
+    <!-- Bootstrap CSS -->
+    <link href="bootstrap-5.3.8-dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Bootstrap Icons -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="css/conference.css">
+</head>
+<body>
+    <!-- 顶部工具栏 -->
+    <div class="top-toolbar">
+        <div class="toolbar-left">
+            <div class="room-info">
+                <i class="bi bi-camera-video-fill"></i>
+                <span id="roomName">视频会议</span>
+            </div>
+            <div class="participant-count">
+                <i class="bi bi-people-fill"></i>
+                <span id="participantCount">0</span>
+            </div>
+        </div>
+        <div class="toolbar-right">
+            <div class="call-meta">
+                <span id="connectionStateText" class="status-pill">准备中</span>
+                <span id="callTimer" class="call-timer">00:00</span>
+                <span id="screenShareIndicator" class="status-pill screen-share-indicator">屏幕共享</span>
+            </div>
+            <button id="settingsBtn" class="icon-btn" title="设置">
+                <i class="bi bi-gear-fill"></i>
+            </button>
+            <div class="connection-indicator">
+                <span id="connectionStatus" class="status-dot connected"></span>
+                <span id="networkQuality">良好</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- 主视频区域 -->
+    <div class="main-content">
+        <!-- 视频网格容器 -->
+        <div id="videoGrid" class="video-grid">
+            <!-- 本地视频（自己） -->
+            <div id="localParticipant" class="video-tile local">
+                <video id="localVideo" autoplay muted playsinline></video>
+                <div class="participant-info">
+                    <div class="name-badge">
+                        <i class="bi bi-mic-fill"></i>
+                        <span id="localName">我</span>
+                    </div>
+                </div>
+                <div class="video-controls-overlay">
+                    <button class="pin-btn" title="固定视频">
+                        <i class="bi bi-pin"></i>
+                    </button>
+                </div>
+            </div>
+            <!-- 远程参与者视频将动态添加到这里 -->
+        </div>
+
+        <!-- 空状态提示 -->
+        <div id="emptyState" class="empty-state">
+            <div class="empty-icon">
+                <i class="bi bi-people"></i>
+            </div>
+            <h3>等待其他人加入...</h3>
+            <p>分享会议链接邀请他人加入</p>
+        </div>
+    </div>
+
+    <!-- 底部控制栏 -->
+    <div class="bottom-controls">
+        <div class="controls-group">
+            <!-- 麦克风控制 -->
+            <div class="control-item">
+                <button id="micBtn" class="control-btn active" title="麦克风">
+                    <i class="bi bi-mic-fill"></i>
+                </button>
+                <span class="control-label">麦克风</span>
+            </div>
+
+            <!-- 摄像头控制 -->
+            <div class="control-item">
+                <button id="cameraBtn" class="control-btn active" title="摄像头">
+                    <i class="bi bi-camera-video-fill"></i>
+                </button>
+                <span class="control-label">摄像头</span>
+            </div>
+
+            <!-- 屏幕共享 -->
+            <div class="control-item">
+                <button id="shareScreenBtn" class="control-btn" title="共享屏幕">
+                    <i class="bi bi-display"></i>
+                </button>
+                <span class="control-label">共享屏幕</span>
+            </div>
+
+            <!-- 参与者列表 -->
+            <div class="control-item">
+                <button id="participantsBtn" class="control-btn" title="参与者">
+                    <i class="bi bi-people"></i>
+                    <span class="badge">0</span>
+                </button>
+                <span class="control-label">参与者</span>
+            </div>
+
+            <!-- 聊天 -->
+            <div class="control-item">
+                <button id="chatBtn" class="control-btn" title="聊天">
+                    <i class="bi bi-chat-dots"></i>
+                    <span class="badge unread" style="display:none;">0</span>
+                </button>
+                <span class="control-label">聊天</span>
+            </div>
+
+            <!-- 更多选项 -->
+            <div class="control-item">
+                <button id="moreBtn" class="control-btn" title="更多">
+                    <i class="bi bi-three-dots"></i>
+                </button>
+                <span class="control-label">更多</span>
+            </div>
+        </div>
+
+        <!-- 挂断按钮 -->
+        <div class="end-call-section">
+            <button id="shareBtn" class="btn-share" title="复制会议链接">
+                <i class="bi bi-share"></i>
+                分享链接
+            </button>
+            <button id="leaveBtn" class="btn-leave" title="离开会议">
+                <i class="bi bi-telephone-x-fill"></i>
+                离开
+            </button>
+        </div>
+    </div>
+
+    <!-- 侧边栏 - 参与者列表 -->
+    <div id="participantsSidebar" class="sidebar participants-sidebar">
+        <div class="sidebar-header">
+            <h3>参与者 (<span id="sidebarParticipantCount">0</span>)</h3>
+            <button class="close-sidebar">
+                <i class="bi bi-x-lg"></i>
+            </button>
+        </div>
+        <div class="sidebar-content">
+            <div id="participantsList" class="participants-list">
+                <!-- 参与者列表项将动态添加 -->
+            </div>
+        </div>
+    </div>
+
+    <!-- 侧边栏 - 聊天 -->
+    <div id="chatSidebar" class="sidebar chat-sidebar">
+        <div class="sidebar-header">
+            <h3>聊天</h3>
+            <button class="close-sidebar">
+                <i class="bi bi-x-lg"></i>
+            </button>
+        </div>
+        <div class="sidebar-content">
+            <div id="chatMessages" class="chat-messages">
+                <!-- 聊天消息将动态添加 -->
+            </div>
+            <div class="chat-input-container">
+                <input type="text" id="chatInput" placeholder="输入消息..." class="chat-input">
+                <button id="sendChatBtn" class="btn-send">
+                    <i class="bi bi-send-fill"></i>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 设置模态框 -->
+    <div id="settingsModal" class="modal">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>设置</h3>
+                    <button class="close-modal">
+                        <i class="bi bi-x-lg"></i>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <div class="settings-group">
+                        <label>视频设备</label>
+                        <select id="cameraSelect" class="form-select">
+                            <option>正在加载设备...</option>
+                        </select>
+                    </div>
+                    <div class="settings-group">
+                        <label>音频设备</label>
+                        <select id="microphoneSelect" class="form-select">
+                            <option>正在加载设备...</option>
+                        </select>
+                    </div>
+                    <div class="settings-group">
+                        <label>扬声器</label>
+                        <select id="speakerSelect" class="form-select">
+                            <option>正在加载设备...</option>
+                        </select>
+                    </div>
+                    <div class="settings-group">
+                        <label>视频质量</label>
+                        <select id="videoQualitySelect" class="form-select">
+                            <option value="high">高清 (720p)</option>
+                            <option value="medium" selected>标清 (480p)</option>
+                            <option value="low">流畅 (360p)</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 加载提示 -->
+    <div id="loadingOverlay" class="loading-overlay">
+        <div class="loading-content">
+            <div class="spinner"></div>
+            <p id="loadingText">正在连接会议...</p>
+        </div>
+    </div>
+
+    <!-- Toast 通知 -->
+    <div id="toastContainer" class="toast-container"></div>
+
+    <!-- LiveKit Client SDK - 使用CDN -->
+    <script src="livekit/livekit-client.umd.min.js"></script>
+    
+    <!-- Bootstrap JS -->
+    <script src="bootstrap-5.3.8-dist/js/bootstrap.bundle.min.js"></script>
+    <!-- 应用脚本 -->
+    <script src="js/conference-manager.js"></script>
+    <script src="js/conference-ui.js"></script>
+    <script src="js/conference-app.js"></script>
+</body>
+</html>

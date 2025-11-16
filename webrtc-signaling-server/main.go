@@ -2,472 +2,302 @@ package main
 
 import (
 	"encoding/json"
-	"flag"
+	"fmt"
 	"log"
 	"net/http"
-	"sync"
+	"os"
+	"strings"
 	"time"
 
-	"github.com/gorilla/websocket"
+	"github.com/gorilla/mux"
+	"github.com/joho/godotenv"
+	"github.com/livekit/protocol/auth"
+	"github.com/livekit/protocol/livekit"
+	lksdk "github.com/livekit/server-sdk-go/v2"
+	"github.com/rs/cors"
 )
-
-// WebRTCSignalingServer WebRTC信令服务器
-type WebRTCSignalingServer struct {
-	clients map[string]*WebRTCClient // map[uid]*WebRTCClient
-	mutex   sync.RWMutex
-}
-
-// WebRTCClient WebRTC客户端连接
-type WebRTCClient struct {
-	uid    string
-	conn   *websocket.Conn
-	server *WebRTCSignalingServer
-	send   chan []byte
-}
-
-// WebRTCMessage WebRTC信令消息结构
-type WebRTCMessage struct {
-	Type    string          `json:"type"`
-	From    string          `json:"from,omitempty"`
-	To      string          `json:"to,omitempty"`
-	Payload json.RawMessage `json:"payload,omitempty"`
-}
-
-// IceServer ICE服务器配置
-type IceServer struct {
-	URLs       []string `json:"urls"`
-	Username   string   `json:"username,omitempty"`
-	Credential string   `json:"credential,omitempty"`
-}
 
 var (
-	addr     = flag.String("addr", ":8081", "http service address")
-	upgrader = websocket.Upgrader{
-		CheckOrigin: func(r *http.Request) bool {
-			return true // 允许所有来源
-		},
-	}
-	server *WebRTCSignalingServer
+	// LiveKit 配置
+	livekitURL   string // HTTP/HTTPS URL for API calls
+	livekitWsURL string // WebSocket URL for client connections
+	apiKey       string
+	apiSecret    string
+	serverPort   string
+	serverHost   string
+	roomClient   *lksdk.RoomServiceClient
 )
 
+// Room 房间信息
+type Room struct {
+	Name         string    `json:"name"`
+	DisplayName  string    `json:"displayName"`
+	Participants int       `json:"participants"`
+	CreatedAt    time.Time `json:"createdAt"`
+}
+
+// TokenRequest 请求Token的结构
+type TokenRequest struct {
+	RoomName        string `json:"roomName"`
+	ParticipantName string `json:"participantName"`
+}
+
+// TokenResponse Token响应结构
+type TokenResponse struct {
+	Token    string `json:"token"`
+	URL      string `json:"url"`
+	RoomName string `json:"roomName"`
+}
+
+// ErrorResponse 错误响应
+type ErrorResponse struct {
+	Error string `json:"error"`
+}
+
+func init() {
+	// 加载环境变量
+	if err := godotenv.Load(); err != nil {
+		log.Println("未找到 .env 文件，使用默认配置")
+	}
+
+	livekitURL = getEnv("LIVEKIT_URL", "http://localhost:7880")
+	livekitWsURL = getEnv("LIVEKIT_WS_URL", "ws://localhost:7880")
+	apiKey = getEnv("LIVEKIT_API_KEY", "devkey")
+	apiSecret = getEnv("LIVEKIT_API_SECRET", "secret")
+	serverPort = getEnv("SERVER_PORT", "8081")
+	serverHost = getEnv("SERVER_HOST", "localhost")
+}
+
 func main() {
-	flag.Parse()
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
-	server = NewWebRTCSignalingServer()
+	// 初始化 LiveKit Room Client
+	roomClient = lksdk.NewRoomServiceClient(livekitURL, apiKey, apiSecret)
+
+	// 创建路由
+	router := mux.NewRouter()
+
+	// API 端点 - 必须先注册API路由
+	api := router.PathPrefix("/api").Subrouter()
+	api.HandleFunc("/token", handleGetToken).Methods("POST")
+	api.HandleFunc("/rooms", handleListRooms).Methods("GET")
+	api.HandleFunc("/rooms", handleCreateRoom).Methods("POST")
+	api.HandleFunc("/rooms/{roomName}", handleDeleteRoom).Methods("DELETE")
+	api.HandleFunc("/rooms/{roomName}/participants", handleListParticipants).Methods("GET")
+	api.HandleFunc("/health", handleHealth).Methods("GET")
 
 	// 静态文件服务
-	http.Handle("/", http.FileServer(http.Dir("./static")))
+	router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, "./static/index.html")
+	}).Methods("GET")
 
-	// WebSocket端点
-	http.HandleFunc("/ws/webrtc", handleWebRTCConnection)
-	http.HandleFunc("/health", handleHealth)
+	router.PathPrefix("/").Handler(http.FileServer(http.Dir("./static")))
 
-	log.Printf("WebRTC信令服务器启动在 %s", *addr)
-	log.Printf("WebSocket地址: ws://localhost%s/ws/webrtc?uid=YOUR_CLIENT_ID", *addr)
-	log.Printf("Web应用地址: http://localhost%s", *addr)
-
-	if err := http.ListenAndServe(*addr, nil); err != nil {
-		log.Fatal("启动服务器失败:", err)
-	}
-}
-
-// handleHealth 健康检查接口
-func handleHealth(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("OK"))
-}
-
-// handleWebRTCConnection 处理WebRTC WebSocket连接
-func handleWebRTCConnection(w http.ResponseWriter, r *http.Request) {
-	// 从URL参数获取客户端ID
-	uid := r.URL.Query().Get("uid")
-	if uid == "" {
-		log.Printf("缺少uid参数")
-		http.Error(w, "Missing uid parameter", http.StatusBadRequest)
-		return
-	}
-
-	conn, err := upgrader.Upgrade(w, r, nil)
-	if err != nil {
-		log.Printf("WebSocket升级失败: %v", err)
-		return
-	}
-
-	log.Printf("新的WebRTC连接: uid=%s, remote=%s", uid, r.RemoteAddr)
-	server.HandleConnection(conn, uid)
-}
-
-// NewWebRTCSignalingServer 创建新的WebRTC信令服务器
-func NewWebRTCSignalingServer() *WebRTCSignalingServer {
-	return &WebRTCSignalingServer{
-		clients: make(map[string]*WebRTCClient),
-	}
-}
-
-// HandleConnection 处理新的WebRTC信令连接
-func (s *WebRTCSignalingServer) HandleConnection(conn *websocket.Conn, uid string) {
-	client := &WebRTCClient{
-		uid:    uid,
-		conn:   conn,
-		server: s,
-		send:   make(chan []byte, 256),
-	}
-
-	// 处理重复登录
-	s.mutex.Lock()
-	if existingClient, ok := s.clients[uid]; ok {
-		// 关闭旧连接
-		log.Printf("检测到重复登录，关闭旧连接: %s", uid)
-		delete(s.clients, uid)
-		s.mutex.Unlock()
-
-		// 在锁外关闭旧连接，避免死锁
-		go func() {
-			existingClient.conn.Close()
-			defer func() {
-				if r := recover(); r != nil {
-					log.Printf("关闭旧连接 send channel 时发生 panic: %v", r)
-				}
-			}()
-			close(existingClient.send)
-		}()
-
-		s.mutex.Lock()
-	}
-	s.clients[uid] = client
-	s.mutex.Unlock()
-
-	log.Printf("WebRTC客户端连接成功: %s (当前在线: %d)", uid, s.getClientCount())
-
-	// 启动读写协程
-	go client.writePump()
-	go client.readPump()
-
-	// 延迟发送注册消息，确保 writePump 已经启动
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-		s.sendRegisteredMessage(client)
-	}()
-}
-
-// getClientCount 获取当前在线客户端数量
-func (s *WebRTCSignalingServer) getClientCount() int {
-	s.mutex.RLock()
-	defer s.mutex.RUnlock()
-	return len(s.clients)
-}
-
-// sendRegisteredMessage 发送注册确认消息
-func (s *WebRTCSignalingServer) sendRegisteredMessage(client *WebRTCClient) {
-	log.Printf("发送注册消息给客户端: %s", client.uid)
-
-	iceServers := s.getIceServers()
-	payload := map[string]interface{}{
-		"iceServers": iceServers,
-	}
-
-	payloadData, _ := json.Marshal(payload)
-	response := WebRTCMessage{
-		Type:    "registered",
-		From:    client.uid,
-		Payload: payloadData,
-	}
-
-	data, err := json.Marshal(response)
-	if err != nil {
-		log.Printf("序列化注册消息失败: %v", err)
-		return
-	}
-
-	select {
-	case client.send <- data:
-		log.Printf("✓ 注册消息发送成功: %s", client.uid)
-	default:
-		log.Printf("✗ 客户端发送缓冲区已满: %s", client.uid)
-		return
-	}
-
-	// 立即发送客户端列表给新连接的客户端
-	s.sendClientList(client)
-
-	// 广播客户端列表给所有其他客户端
-	s.broadcastClientList()
-}
-
-// getIceServers 获取ICE服务器配置
-func (s *WebRTCSignalingServer) getIceServers() []IceServer {
-	return []IceServer{
-		// Google 公共 STUN 服务器
-		{
-			URLs: []string{"stun:stun.l.google.com:19302"},
-		},
-		// Google 备用 STUN 服务器
-		{
-			URLs: []string{"stun:stun1.l.google.com:19302"},
-		},
-		// 公共 TURN 服务器作为备份
-		{
-			URLs:       []string{"turn:openrelay.metered.ca:80"},
-			Username:   "openrelayproject",
-			Credential: "openrelayproject",
-		},
-		{
-			URLs:       []string{"turn:openrelay.metered.ca:443"},
-			Username:   "openrelayproject",
-			Credential: "openrelayproject",
-		},
-		{
-			URLs:       []string{"turn:openrelay.metered.ca:443?transport=tcp"},
-			Username:   "openrelayproject",
-			Credential: "openrelayproject",
-		},
-	}
-}
-
-// removeClient 移除客户端
-func (s *WebRTCSignalingServer) removeClient(client *WebRTCClient) {
-	s.mutex.Lock()
-	// 只有当 map 中的客户端就是当前这个客户端时才删除
-	if existingClient, ok := s.clients[client.uid]; ok && existingClient == client {
-		delete(s.clients, client.uid)
-		log.Printf("WebRTC客户端断开: %s (剩余在线: %d)", client.uid, len(s.clients))
-
-		// 通知其他客户端该用户已下线
-		go s.notifyUserOffline(client.uid)
-
-		// 广播客户端列表
-		go s.broadcastClientList()
-	} else {
-		log.Printf("WebRTC客户端断开（但已有新连接）: %s", client.uid)
-	}
-	s.mutex.Unlock()
-
-	// 安全地关闭 send channel
-	defer func() {
-		if r := recover(); r != nil {
-			log.Printf("关闭 send channel 时发生 panic: %v", r)
-		}
-	}()
-	close(client.send)
-}
-
-// notifyUserOffline 通知其他客户端用户已下线
-func (s *WebRTCSignalingServer) notifyUserOffline(uid string) {
-	payload := map[string]interface{}{
-		"clientId": uid,
-	}
-	payloadData, _ := json.Marshal(payload)
-
-	offlineMsg := WebRTCMessage{
-		Type:    "user-offline",
-		From:    "server",
-		Payload: payloadData,
-	}
-
-	data, err := json.Marshal(offlineMsg)
-	if err != nil {
-		log.Printf("序列化下线消息失败: %v", err)
-		return
-	}
-
-	s.mutex.RLock()
-	defer s.mutex.RUnlock()
-
-	for clientUID, client := range s.clients {
-		if clientUID != uid {
-			select {
-			case client.send <- data:
-			default:
-				log.Printf("发送下线通知失败: %s", clientUID)
-			}
-		}
-	}
-}
-
-// relayMessage 转发消息
-func (s *WebRTCSignalingServer) relayMessage(senderUID string, msg *WebRTCMessage) {
-	s.mutex.RLock()
-	targetClient, ok := s.clients[msg.To]
-	s.mutex.RUnlock()
-
-	if !ok {
-		log.Printf("✗ 目标客户端不在线: %s", msg.To)
-		return
-	}
-
-	data, err := json.Marshal(msg)
-	if err != nil {
-		log.Printf("序列化转发消息失败: %v", err)
-		return
-	}
-
-	select {
-	case targetClient.send <- data:
-		log.Printf("✓ 消息转发: %s -> %s (type: %s)", senderUID, msg.To, msg.Type)
-	default:
-		log.Printf("✗ 目标客户端发送缓冲区已满: %s", msg.To)
-	}
-}
-
-// broadcastClientList 广播客户端列表
-func (s *WebRTCSignalingServer) broadcastClientList() {
-	s.mutex.RLock()
-	var clients []map[string]string
-	for uid := range s.clients {
-		clients = append(clients, map[string]string{"id": uid})
-	}
-	s.mutex.RUnlock()
-
-	log.Printf("广播客户端列表 (在线: %d)", len(clients))
-
-	payload := map[string]interface{}{
-		"clients": clients,
-	}
-	payloadData, _ := json.Marshal(payload)
-
-	message := WebRTCMessage{
-		Type:    "client-list",
-		Payload: payloadData,
-	}
-
-	data, err := json.Marshal(message)
-	if err != nil {
-		log.Printf("序列化客户端列表失败: %v", err)
-		return
-	}
-
-	s.mutex.RLock()
-	defer s.mutex.RUnlock()
-
-	for _, client := range s.clients {
-		select {
-		case client.send <- data:
-		default:
-			log.Printf("广播客户端列表失败: %s", client.uid)
-		}
-	}
-}
-
-// sendClientList 发送客户端列表给指定客户端
-func (s *WebRTCSignalingServer) sendClientList(client *WebRTCClient) {
-	s.mutex.RLock()
-	var clients []map[string]string
-	for uid := range s.clients {
-		clients = append(clients, map[string]string{"id": uid})
-	}
-	s.mutex.RUnlock()
-
-	log.Printf("发送客户端列表给 %s (在线: %d)", client.uid, len(clients))
-
-	payload := map[string]interface{}{
-		"clients": clients,
-	}
-	payloadData, _ := json.Marshal(payload)
-
-	message := WebRTCMessage{
-		Type:    "client-list",
-		Payload: payloadData,
-	}
-
-	data, err := json.Marshal(message)
-	if err != nil {
-		log.Printf("序列化客户端列表失败: %v", err)
-		return
-	}
-
-	select {
-	case client.send <- data:
-		log.Printf("✓ 客户端列表发送成功: %s", client.uid)
-	default:
-		log.Printf("✗ 发送客户端列表失败: %s", client.uid)
-	}
-}
-
-// ============================================================================
-// WebRTCClient 方法
-// ============================================================================
-
-// readPump 读取客户端消息
-func (c *WebRTCClient) readPump() {
-	defer func() {
-		c.server.removeClient(c)
-		c.conn.Close()
-	}()
-
-	c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
-	c.conn.SetPongHandler(func(string) error {
-		c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
-		return nil
+	// CORS 配置
+	c := cors.New(cors.Options{
+		AllowedOrigins:   []string{"*"},
+		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"*"},
+		AllowCredentials: true,
 	})
 
-	for {
-		_, message, err := c.conn.ReadMessage()
-		if err != nil {
-			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				log.Printf("WebRTC客户端连接错误: %v", err)
-			}
-			break
-		}
+	handler := c.Handler(router)
 
-		var msg WebRTCMessage
-		if err := json.Unmarshal(message, &msg); err != nil {
-			log.Printf("解析WebRTC消息失败: %v", err)
-			continue
-		}
+	addr := fmt.Sprintf(":%s", serverPort)
+	log.Println()
+	log.Println("====================================")
+	log.Printf("🚀 LiveKit 视频会议服务器启动成功")
+	log.Println("====================================")
+	log.Printf("📍 服务地址: http://%s%s", serverHost, addr)
+	log.Printf("🎥 LiveKit API: %s", livekitURL)
+	log.Printf("🔌 LiveKit WebSocket: %s", livekitWsURL)
+	log.Printf("🔑 API Key: %s", apiKey)
+	log.Printf("📱 访问 Web 应用: http://%s%s", serverHost, addr)
+	log.Println("====================================")
+	log.Println()
 
-		// 设置发送者
-		msg.From = c.uid
-
-		log.Printf("收到消息: type=%s, from=%s, to=%s", msg.Type, msg.From, msg.To)
-
-		switch msg.Type {
-		case "register":
-			// 注册消息已经在连接时处理，这里忽略
-			log.Printf("忽略注册消息，客户端已注册: %s", c.uid)
-		case "list-clients":
-			c.server.sendClientList(c)
-		case "offer", "answer", "ice-candidate", "conflict-resolution",
-			"call-request", "call-response", "call-cancel", "call-end":
-			// 转发信令消息
-			if msg.To == "" {
-				log.Printf("消息缺少目标用户: type=%s", msg.Type)
-				continue
-			}
-			c.server.relayMessage(c.uid, &msg)
-		default:
-			log.Printf("未知的消息类型: %s", msg.Type)
-		}
+	if err := http.ListenAndServe(addr, handler); err != nil {
+		log.Fatalf("❌ 服务器启动失败: %v", err)
 	}
 }
 
-// writePump 向客户端写入消息
-func (c *WebRTCClient) writePump() {
-	ticker := time.NewTicker(54 * time.Second)
-	defer func() {
-		ticker.Stop()
-		c.conn.Close()
-	}()
+// ============================================================================
+// 辅助函数
+// ============================================================================
 
-	for {
-		select {
-		case message, ok := <-c.send:
-			c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			if !ok {
-				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
-				return
-			}
-
-			if err := c.conn.WriteMessage(websocket.TextMessage, message); err != nil {
-				log.Printf("写入消息失败: %v", err)
-				return
-			}
-
-		case <-ticker.C:
-			c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
-				return
-			}
-		}
+func getEnv(key, defaultValue string) string {
+	value := os.Getenv(key)
+	if value == "" {
+		return defaultValue
 	}
+	return value
+}
+
+func respondJSON(w http.ResponseWriter, status int, data interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(data)
+}
+
+func respondError(w http.ResponseWriter, status int, message string) {
+	respondJSON(w, status, ErrorResponse{Error: message})
+}
+
+// ============================================================================
+// HTTP 处理器
+// ============================================================================
+
+func serveHome(w http.ResponseWriter, r *http.Request) {
+	http.ServeFile(w, r, "./static/index.html")
+}
+
+func handleHealth(w http.ResponseWriter, r *http.Request) {
+	respondJSON(w, http.StatusOK, map[string]string{
+		"status": "ok",
+		"time":   time.Now().Format(time.RFC3339),
+	})
+}
+
+// handleGetToken 生成 LiveKit 访问令牌
+func handleGetToken(w http.ResponseWriter, r *http.Request) {
+	var req TokenRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "无效的请求格式")
+		return
+	}
+
+	if req.RoomName == "" {
+		req.RoomName = "default-room"
+	}
+	if req.ParticipantName == "" {
+		req.ParticipantName = fmt.Sprintf("user-%d", time.Now().Unix())
+	}
+
+	// 清理房间名和参与者名
+	req.RoomName = strings.TrimSpace(req.RoomName)
+	req.ParticipantName = strings.TrimSpace(req.ParticipantName)
+
+	// 创建 Access Token
+	at := auth.NewAccessToken(apiKey, apiSecret)
+	canPublish := true
+	canSubscribe := true
+	grant := &auth.VideoGrant{
+		RoomJoin:     true,
+		Room:         req.RoomName,
+		CanPublish:   &canPublish,
+		CanSubscribe: &canSubscribe,
+	}
+	at.AddGrant(grant).
+		SetIdentity(req.ParticipantName).
+		SetValidFor(24 * time.Hour)
+
+	token, err := at.ToJWT()
+	if err != nil {
+		log.Printf("生成 token 失败: %v", err)
+		respondError(w, http.StatusInternalServerError, "生成令牌失败")
+		return
+	}
+
+	log.Printf("✅ 为用户 '%s' 生成房间 '%s' 的访问令牌", req.ParticipantName, req.RoomName)
+
+	respondJSON(w, http.StatusOK, TokenResponse{
+		Token:    token,
+		URL:      livekitWsURL,
+		RoomName: req.RoomName,
+	})
+}
+
+// handleListRooms 列出所有活跃的房间
+func handleListRooms(w http.ResponseWriter, r *http.Request) {
+	rooms, err := roomClient.ListRooms(r.Context(), &livekit.ListRoomsRequest{})
+	if err != nil {
+		log.Printf("获取房间列表失败: %v", err)
+		respondError(w, http.StatusInternalServerError, "获取房间列表失败")
+		return
+	}
+
+	var roomList []Room
+	for _, room := range rooms.Rooms {
+		roomList = append(roomList, Room{
+			Name:         room.Name,
+			DisplayName:  room.Name,
+			Participants: int(room.NumParticipants),
+			CreatedAt:    time.Unix(room.CreationTime, 0),
+		})
+	}
+
+	respondJSON(w, http.StatusOK, roomList)
+}
+
+// handleCreateRoom 创建新房间
+func handleCreateRoom(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "无效的请求格式")
+		return
+	}
+
+	if req.Name == "" {
+		req.Name = fmt.Sprintf("room-%d", time.Now().Unix())
+	}
+
+	room, err := roomClient.CreateRoom(r.Context(), &livekit.CreateRoomRequest{
+		Name:            req.Name,
+		EmptyTimeout:    300, // 5分钟无人自动关闭
+		MaxParticipants: 50,
+	})
+	if err != nil {
+		log.Printf("创建房间失败: %v", err)
+		respondError(w, http.StatusInternalServerError, "创建房间失败")
+		return
+	}
+
+	log.Printf("✅ 创建房间: %s", room.Name)
+
+	respondJSON(w, http.StatusCreated, Room{
+		Name:         room.Name,
+		DisplayName:  room.Name,
+		Participants: int(room.NumParticipants),
+		CreatedAt:    time.Unix(room.CreationTime, 0),
+	})
+}
+
+// handleDeleteRoom 删除房间
+func handleDeleteRoom(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	roomName := vars["roomName"]
+
+	_, err := roomClient.DeleteRoom(r.Context(), &livekit.DeleteRoomRequest{
+		Room: roomName,
+	})
+	if err != nil {
+		log.Printf("删除房间失败: %v", err)
+		respondError(w, http.StatusInternalServerError, "删除房间失败")
+		return
+	}
+
+	log.Printf("✅ 删除房间: %s", roomName)
+
+	respondJSON(w, http.StatusOK, map[string]string{
+		"message": "房间已删除",
+	})
+}
+
+// handleListParticipants 列出房间中的参与者
+func handleListParticipants(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	roomName := vars["roomName"]
+
+	participants, err := roomClient.ListParticipants(r.Context(), &livekit.ListParticipantsRequest{
+		Room: roomName,
+	})
+	if err != nil {
+		log.Printf("获取参与者列表失败: %v", err)
+		respondError(w, http.StatusInternalServerError, "获取参与者列表失败")
+		return
+	}
+
+	respondJSON(w, http.StatusOK, participants)
 }

@@ -1,607 +1,86 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-bs-theme="light">
+<html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <title>WebRTC 专业视频通话平台</title>
-    <meta name="description" content="现代化的WebRTC视频通话解决方案，支持PC端和移动端">
-    <meta name="theme-color" content="#1a73e8">
-    
-    <!-- Bootstrap CSS -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LiveKit 视频会议</title>
     <link href="bootstrap-5.3.8-dist/css/bootstrap.min.css" rel="stylesheet">
-    <!-- Bootstrap Icons -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
-    <!-- Custom CSS -->
-    <link rel="stylesheet" href="css/style.css">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    
-    <!-- PWA支持 -->
-    <link rel="manifest" href="manifest.json">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="default">
-    <meta name="apple-mobile-web-app-title" content="WebRTC Call">
-    
-    <!-- 安全策略 -->
-    <meta http-equiv="Content-Security-Policy" content="
-        default-src 'self' 'unsafe-inline' 'unsafe-eval' https: data: blob:;
-        media-src 'self' blob:;
-        connect-src 'self' ws: wss: https:;
-        img-src 'self' data: blob:;
-    ">
+    <link rel="stylesheet" href="css/home.css">
 </head>
 <body>
-    <!-- 顶部导航栏 -->
-    <nav class="navbar navbar-expand-lg sticky-top">
-        <div class="container-fluid">
-            <a class="navbar-brand fw-bold" href="#">
-                <i class="bi bi-camera-video-fill me-2"></i>
-                <span>WebRTC 专业视频通话</span>
-            </a>
+    <div class="container">
+        <div class="card">
+            <div class="logo">
+                <i class="bi bi-camera-video-fill"></i>
+            </div>
             
-            <div class="d-flex align-items-center gap-3">
-                <!-- 连接状态 -->
-                <div id="connectionStatus" class="status-indicator disconnected">
-                    <span class="connection-light disconnected"></span>
-                    <span>连接断开</span>
+            <h1>LiveKit 视频会议</h1>
+            <p class="subtitle">高质量的视频会议体验</p>
+
+            <div id="alert" class="alert"></div>
+
+            <form id="joinForm">
+                <div class="form-group">
+                    <label>您的姓名</label>
+                    <div class="input-group">
+                        <i class="bi bi-person-fill"></i>
+                        <input type="text" id="userName" placeholder="请输入您的姓名" required>
+                    </div>
                 </div>
-                
-                <!-- 主题切换 -->
-                <button id="themeToggle" class="btn btn-outline-secondary btn-sm">
-                    <i class="bi bi-moon-fill"></i>
+
+                <div class="form-group">
+                    <label>会议室名称</label>
+                    <div class="input-group">
+                        <i class="bi bi-door-open-fill"></i>
+                        <input type="text" id="roomName" placeholder="请输入会议室名称" required>
+                    </div>
+                </div>
+
+                <button type="submit" class="btn-primary" id="joinBtn">
+                    <i class="bi bi-box-arrow-in-right"></i>
+                    加入会议
+                </button>
+            </form>
+
+            <div class="divider">
+                <span>或者</span>
+            </div>
+
+            <div class="quick-actions">
+                <button class="btn-secondary" id="quickJoinBtn">
+                    <i class="bi bi-lightning-fill"></i>
+                    快速加入
+                </button>
+                <button class="btn-secondary" id="createRoomBtn">
+                    <i class="bi bi-plus-circle-fill"></i>
+                    创建会议
                 </button>
             </div>
-        </div>
-    </nav>
 
-    <!-- 主要内容区 -->
-    <div class="container-fluid px-4 py-3">
-        <div class="row g-4">
-            <!-- 左侧控制面板 -->
-            <div class="col-lg-4 col-xl-3">
-                <!-- 媒体控制 -->
-                <div class="info-panel mb-4">
-                    <div class="info-panel-header">
-                        <i class="bi bi-camera-video-fill text-primary"></i>
-                        媒体控制
-                    </div>
-                    <div class="info-panel-body">
-                        <div class="d-grid gap-2">
-                            <button id="startCameraBtn" class="btn btn-success">
-                                <i class="bi bi-camera-video me-2"></i>开启摄像头
-                            </button>
-                            <button id="stopCameraBtn" class="btn btn-danger" style="display:none;">
-                                <i class="bi bi-camera-video-off me-2"></i>关闭摄像头
-                            </button>
-                            <button id="startAudioBtn" class="btn btn-primary">
-                                <i class="bi bi-mic me-2"></i>开启音频
-                            </button>
-                            <button id="stopAudioBtn" class="btn btn-danger" style="display:none;">
-                                <i class="bi bi-mic-mute me-2"></i>关闭音频
-                            </button>
-                        </div>
-                    </div>
+            <div class="features">
+                <div class="feature-item">
+                    <i class="bi bi-shield-check"></i>
+                    <span>端到端加密保护</span>
                 </div>
-
-                <!-- 通话控制 -->
-                <div class="info-panel mb-4">
-                    <div class="info-panel-header">
-                        <i class="bi bi-telephone-fill text-primary"></i>
-                        通话控制
-                    </div>
-                    <div class="info-panel-body">
-                        <div class="d-grid gap-2">
-                            <button id="endCallBtn" class="btn btn-danger" style="display:none;">
-                                <i class="bi bi-telephone-x me-2"></i>结束通话
-                            </button>
-                            <button id="cancelCallBtn" class="btn btn-warning" style="display:none;">
-                                <i class="bi bi-x-circle me-2"></i>取消呼叫
-                            </button>
-                            <button id="reconnectBtn" class="btn btn-outline-primary">
-                                <i class="bi bi-arrow-clockwise me-2"></i>重新连接
-                            </button>
-                        </div>
-                    </div>
+                <div class="feature-item">
+                    <i class="bi bi-hdd-network"></i>
+                    <span>低延迟高清视频</span>
                 </div>
-
-                <!-- 在线用户 -->
-                <div class="info-panel mb-4">
-                    <div class="info-panel-header">
-                        <i class="bi bi-people-fill text-primary"></i>
-                        在线用户 (<span id="userCount" class="text-primary fw-bold">0</span>)
-                    </div>
-                    <div class="info-panel-body">
-                        <div style="max-height: 200px; overflow-y: auto;">
-                            <div id="clientsList">
-                                <div class="text-center text-muted p-3">
-                                    <i class="bi bi-person-x fs-1 opacity-25"></i>
-                                    <p class="small mb-0 mt-2">暂无其他用户在线</p>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- 系统信息 -->
-                <div class="info-panel">
-                    <div class="info-panel-header">
-                        <i class="bi bi-info-circle-fill text-primary"></i>
-                        系统信息
-                    </div>
-                    <div class="info-panel-body">
-                        <div class="info-grid">
-                            <div class="info-item">
-                                <span class="info-label">设备类型</span>
-                                <span id="deviceType" class="info-value">检测中...</span>
-                            </div>
-                            <div class="info-item">
-                                <span class="info-label">浏览器</span>
-                                <span id="browserInfo" class="info-value">检测中...</span>
-                            </div>
-                            <div class="info-item">
-                                <span class="info-label">WebRTC支持</span>
-                                <span id="webrtcSupport" class="info-value success">✓ 支持</span>
-                            </div>
-                            <div class="info-item">
-                                <span class="info-label">连接协议</span>
-                                <span id="connectionProtocol" class="info-value">HTTPS</span>
-                            </div>
-                            <div class="info-item">
-                                <span class="info-label">连接质量</span>
-                                <div class="quality-indicator">
-                                    <div class="quality-bars" id="qualityBars">
-                                        <div class="quality-bar"></div>
-                                        <div class="quality-bar"></div>
-                                        <div class="quality-bar"></div>
-                                        <div class="quality-bar"></div>
-                                        <div class="quality-bar"></div>
-                                    </div>
-                                    <span id="connectionQuality" class="info-value small">未连接</span>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
+                <div class="feature-item">
+                    <i class="bi bi-people"></i>
+                    <span>支持多人同时参会</span>
                 </div>
             </div>
 
-            <!-- 右侧视频和统计区域 -->
-            <div class="col-lg-8 col-xl-9">
-                <div class="row g-4">
-                    <!-- 视频区域 -->
-                    <div class="col-12">
-                        <div class="modern-card">
-                            <div class="info-panel-header">
-                                <i class="bi bi-play-circle-fill text-primary"></i>
-                                实时视频通话
-                                
-                                <!-- 视频控制按钮 -->
-                                <div class="ms-auto">
-                                    <div class="btn-group" role="group" aria-label="视频控制">
-                                        <button id="toggleVideoBtn" class="btn btn-outline-primary btn-sm" style="display:none;" title="切换视频">
-                                            <i class="bi bi-camera-video"></i>
-                                        </button>
-                                        <button id="toggleAudioBtn" class="btn btn-outline-primary btn-sm" style="display:none;" title="静音/取消静音">
-                                            <i class="bi bi-mic"></i>
-                                        </button>
-                                        <button id="screenShareBtn" class="btn btn-outline-secondary btn-sm" style="display:none;" title="屏幕共享">
-                                            <i class="bi bi-display"></i>
-                                        </button>
-                                        <button id="debugVideoBtn" class="btn btn-outline-warning btn-sm" title="调试信息">
-                                            <i class="bi bi-bug"></i>
-                                        </button>
-                                        <button id="fullscreenBtn" class="btn btn-outline-secondary btn-sm" title="全屏">
-                                            <i class="bi bi-fullscreen"></i>
-                                        </button>
-                                    </div>
-                                </div>
-                            </div>
-                            
-                            <div class="p-4">
-                                <!-- 视频网格 -->
-                                <div class="row g-3">
-                                    <div class="col-md-6">
-                                        <div class="video-container">
-                                            <video id="localVideo" autoplay muted playsinline webkit-playsinline style="width: 100%; height: 100%; object-fit: cover;"></video>
-                                            <div class="video-overlay">本地视频</div>
-                                            <div id="localVideoPlaceholder" class="video-placeholder">
-                                                <i class="bi bi-camera-video display-1"></i>
-                                                <p class="mb-0 small">点击"开启摄像头"开始视频通话</p>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <div class="col-md-6">
-                                        <div class="video-container">
-                                            <video id="remoteVideo" autoplay playsinline style="width: 100%; height: 100%; object-fit: cover;"></video>
-                                            <div class="video-overlay">远程视频</div>
-                                            <div id="remoteVideoPlaceholder" class="video-placeholder">
-                                                <i class="bi bi-person display-1"></i>
-                                                <p class="mb-0 small">等待对方加入通话</p>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- 实时统计 -->
-                    <div class="col-12">
-                        <div id="callStats" style="display:none;">
-                            <div class="row g-3">
-                                <div class="col-md-3 col-6">
-                                    <div class="stat-card">
-                                        <div id="videoBitrate" class="stat-value">0</div>
-                                        <div class="stat-label">视频码率 (kbps)</div>
-                                    </div>
-                                </div>
-                                <div class="col-md-3 col-6">
-                                    <div class="stat-card">
-                                        <div id="audioBitrate" class="stat-value">0</div>
-                                        <div class="stat-label">音频码率 (kbps)</div>
-                                    </div>
-                                </div>
-                                <div class="col-md-3 col-6">
-                                    <div class="stat-card">
-                                        <div id="packetLoss" class="stat-value">0%</div>
-                                        <div class="stat-label">丢包率</div>
-                                    </div>
-                                </div>
-                                <div class="col-md-3 col-6">
-                                    <div class="stat-card">
-                                        <div id="latency" class="stat-value">0ms</div>
-                                        <div class="stat-label">网络延迟</div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- 技术详情 -->
-                    <div class="col-12">
-                        <div class="info-panel">
-                            <div class="info-panel-header">
-                                <i class="bi bi-gear-fill text-primary"></i>
-                                技术详情与诊断
-                            </div>
-                            <div class="info-panel-body">
-                                <div class="row g-3">
-                                    <div class="col-md-6">
-                                        <div class="info-grid">
-                                            <div class="info-item">
-                                                <span class="info-label">ICE 连接状态</span>
-                                                <span id="iceConnectionState" class="info-value">new</span>
-                                            </div>
-                                            <div class="info-item">
-                                                <span class="info-label">信令状态</span>
-                                                <span id="signalingState" class="info-value">stable</span>
-                                            </div>
-                                            <div class="info-item">
-                                                <span class="info-label">DTLS 状态</span>
-                                                <span id="dtlsState" class="info-value">new</span>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <div class="col-md-6">
-                                        <div class="info-grid">
-                                            <div class="info-item">
-                                                <span class="info-label">视频编解码器</span>
-                                                <span id="videoCodec" class="tech-spec">H264</span>
-                                            </div>
-                                            <div class="info-item">
-                                                <span class="info-label">音频编解码器</span>
-                                                <span id="audioCodec" class="tech-spec">OPUS</span>
-                                            </div>
-                                            <div class="info-item">
-                                                <span class="info-label">分辨率</span>
-                                                <span id="videoResolution" class="tech-spec">1280x720</span>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- 日志面板 -->
-                    <div class="col-12">
-                        <div class="info-panel">
-                            <div class="info-panel-header">
-                                <i class="bi bi-terminal text-primary"></i>
-                                系统日志与调试
-                                
-                                <div class="ms-auto d-flex align-items-center gap-2">
-                                    <select id="logFilter" class="form-select form-select-sm" style="width: auto;">
-                                        <option value="all">所有</option>
-                                        <option value="info">信息</option>
-                                        <option value="success">成功</option>
-                                        <option value="warning">警告</option>
-                                        <option value="error">错误</option>
-                                        <option value="debug">调试</option>
-                                    </select>
-                                    
-                                    <div class="btn-group" role="group">
-                                        <button id="clearLogBtn" class="btn btn-outline-secondary btn-sm" title="清空日志">
-                                            <i class="bi bi-trash"></i>
-                                        </button>
-                                        <button id="exportLogBtn" class="btn btn-outline-secondary btn-sm" title="导出日志">
-                                            <i class="bi bi-download"></i>
-                                        </button>
-                                    </div>
-                                    
-                                    <div class="form-check form-switch">
-                                        <input type="checkbox" id="autoScrollToggle" class="form-check-input" checked>
-                                        <label for="autoScrollToggle" class="form-check-label small">自动滚动</label>
-                                    </div>
-                                </div>
-                            </div>
-                            
-                            <div class="p-0">
-                                <div id="logOutput" class="log-terminal">
-                                    <div class="log-entry log-info">
-                                        <span class="log-time">[${new Date().toLocaleTimeString()}]</span>
-                                        <span class="log-level">[INFO]</span>
-                                        <span class="log-message">WebRTC 专业视频通话系统初始化中...</span>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
+            <div class="loading">
+                <div class="spinner"></div>
+                <p id="loadingText">正在连接...</p>
             </div>
         </div>
     </div>
 
-    <!-- 来电通知 -->
-    <div id="incomingCallNotification" class="incoming-call-notification" style="display:none;">
-        <div class="card border-0 shadow-lg">
-            <div class="card-header bg-primary text-white border-0">
-                <h6 class="mb-0 fw-bold">
-                    <i class="bi bi-telephone-fill me-2"></i>
-                    来电通知
-                </h6>
-            </div>
-            <div class="card-body">
-                <div class="d-flex align-items-center mb-3">
-                    <div id="callerAvatar" class="client-avatar me-3"></div>
-                    <div>
-                        <h6 id="callerName" class="mb-1 fw-bold">未知用户</h6>
-                        <small class="text-muted">正在呼叫您...</small>
-                    </div>
-                </div>
-                
-                <div class="d-flex gap-2">
-                    <button id="acceptCallBtn" class="btn btn-success flex-fill">
-                        <i class="bi bi-telephone-fill me-1"></i>接听
-                    </button>
-                    <button id="declineCallBtn" class="btn btn-danger flex-fill">
-                        <i class="bi bi-telephone-x-fill me-1"></i>拒绝
-                    </button>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- 错误提示模态框 -->
-    <div id="errorModal" class="modal fade" tabindex="-1">
-        <div class="modal-dialog modal-dialog-centered">
-            <div class="modal-content">
-                <div class="modal-header border-0">
-                    <h5 class="modal-title text-danger">
-                        <i class="bi bi-exclamation-triangle-fill me-2"></i>
-                        系统错误
-                    </h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                </div>
-                <div class="modal-body">
-                    <p id="errorMessage" class="mb-0"></p>
-                </div>
-                <div class="modal-footer border-0">
-                    <button type="button" class="btn btn-primary" data-bs-dismiss="modal">确定</button>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- 加载中提示 -->
-    <div id="loadingModal" class="modal fade" tabindex="-1" data-bs-backdrop="static">
-        <div class="modal-dialog modal-dialog-centered modal-sm">
-            <div class="modal-content">
-                <div class="modal-body text-center py-4">
-                    <div class="spinner-border text-primary mb-3" role="status">
-                        <span class="visually-hidden">加载中...</span>
-                    </div>
-                    <p id="loadingMessage" class="mb-0">请稍候...</p>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Bootstrap JS Bundle -->
     <script src="bootstrap-5.3.8-dist/js/bootstrap.bundle.min.js"></script>
-    
-    <!-- JavaScript模块 -->
-    <script src="js/signaling-manager.js"></script>
-    <script src="js/media-manager.js"></script>
-    <script src="js/call-manager.js"></script>
-    <script src="js/webrtc-manager.js"></script>
-    <script src="js/ui-manager.js"></script>
-    <script src="js/app.js"></script>
-    
-    <script>
-        // 协议检测和安全提示
-        document.addEventListener('DOMContentLoaded', function() {
-            const isHTTPS = location.protocol === 'https:';
-            const isLocalhost = ['localhost', '127.0.0.1'].includes(location.hostname);
-            const protocolIndicator = document.createElement('div');
-            protocolIndicator.className = 'protocol-indicator';
-            
-            // 更新协议状态
-            const protocolSpan = document.getElementById('connectionProtocol');
-            if (protocolSpan) {
-                protocolSpan.textContent = isHTTPS ? 'HTTPS' : 'HTTP';
-                protocolSpan.className = `info-value ${isHTTPS ? 'success' : 'warning'}`;
-            }
-            
-            if (isHTTPS || isLocalhost) {
-                protocolIndicator.className += ' secure';
-                protocolIndicator.innerHTML = `<i class="bi bi-shield-check me-1"></i>安全连接 (${isHTTPS ? 'HTTPS' : 'HTTP-localhost'})`;
-            } else {
-                protocolIndicator.className += ' insecure';
-                protocolIndicator.innerHTML = `<i class="bi bi-shield-exclamation me-1"></i>非安全连接 (HTTP)`;
-                
-                // 显示HTTPS切换提示
-                setTimeout(() => {
-                    showHTTPSWarning();
-                }, 2000);
-            }
-            
-            document.body.appendChild(protocolIndicator);
-
-            // 设备信息检测
-            const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-            document.getElementById('deviceType').textContent = isMobile ? '移动设备' : '桌面设备';
-            
-            const browser = getBrowserInfo();
-            document.getElementById('browserInfo').textContent = browser;
-            
-            // WebRTC支持检测
-            const webrtcSupport = document.getElementById('webrtcSupport');
-            if (window.RTCPeerConnection && navigator.mediaDevices) {
-                webrtcSupport.textContent = '✓ 完全支持';
-                webrtcSupport.className = 'info-value success';
-            } else {
-                webrtcSupport.textContent = '✗ 不支持';
-                webrtcSupport.className = 'info-value danger';
-            }
-            
-            // 全屏功能
-            document.getElementById('fullscreenBtn').addEventListener('click', function() {
-                if (document.fullscreenElement) {
-                    document.exitFullscreen();
-                } else {
-                    document.documentElement.requestFullscreen().catch(err => {
-                        console.log('全屏失败:', err);
-                    });
-                }
-            });
-            
-            // 调试功能
-            document.getElementById('debugVideoBtn').addEventListener('click', function() {
-                const localVideo = document.getElementById('localVideo');
-                const placeholder = document.getElementById('localVideoPlaceholder');
-                
-                let debugInfo = `=== WebRTC 诊断信息 ===\n`;
-                debugInfo += `本地视频元素: ${localVideo ? '✓' : '✗'}\n`;
-                debugInfo += `占位符元素: ${placeholder ? '✓' : '✗'}\n`;
-                
-                if (localVideo) {
-                    debugInfo += `视频流状态: ${localVideo.srcObject ? '已连接' : '未连接'}\n`;
-                    debugInfo += `视频分辨率: ${localVideo.videoWidth} × ${localVideo.videoHeight}\n`;
-                    debugInfo += `就绪状态: ${['HAVE_NOTHING', 'HAVE_METADATA', 'HAVE_CURRENT_DATA', 'HAVE_FUTURE_DATA', 'HAVE_ENOUGH_DATA'][localVideo.readyState]}\n`;
-                    debugInfo += `播放状态: ${localVideo.paused ? '暂停' : '播放中'}\n`;
-                    debugInfo += `静音状态: ${localVideo.muted ? '已静音' : '未静音'}\n`;
-                    debugInfo += `自动播放: ${localVideo.autoplay ? '启用' : '禁用'}\n`;
-                    
-                    if (localVideo.srcObject) {
-                        const tracks = localVideo.srcObject.getVideoTracks();
-                        debugInfo += `视频轨道数: ${tracks.length}\n`;
-                        tracks.forEach((track, index) => {
-                            debugInfo += `轨道${index + 1}: ${track.enabled ? '启用' : '禁用'} | ${track.readyState} | ${track.kind}\n`;
-                            debugInfo += `  设置: ${track.getSettings ? JSON.stringify(track.getSettings()) : '不可用'}\n`;
-                        });
-                    }
-                }
-                
-                if (placeholder) {
-                    debugInfo += `占位符显示: ${getComputedStyle(placeholder).display}\n`;
-                }
-                
-                // 媒体管理器状态
-                if (window.webrtcDemo && window.webrtcDemo.mediaManager) {
-                    const mediaState = window.webrtcDemo.mediaManager.getMediaState();
-                    debugInfo += `\n=== 媒体管理器状态 ===\n`;
-                    debugInfo += JSON.stringify(mediaState, null, 2);
-                }
-                
-                console.log(debugInfo);
-                alert(debugInfo);
-            });
-            
-            // 主题切换
-            const themeToggle = document.getElementById('themeToggle');
-            if (themeToggle) {
-                themeToggle.addEventListener('click', function() {
-                    const currentTheme = document.documentElement.getAttribute('data-bs-theme');
-                    const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
-                    document.documentElement.setAttribute('data-bs-theme', newTheme);
-                    
-                    const icon = this.querySelector('i');
-                    icon.className = newTheme === 'dark' ? 'bi bi-sun-fill' : 'bi bi-moon-fill';
-                });
-            }
-        });
-        
-        function showHTTPSWarning() {
-            const modal = new bootstrap.Modal(document.createElement('div'));
-            const modalHtml = `
-                <div class="modal fade" tabindex="-1">
-                    <div class="modal-dialog modal-dialog-centered">
-                        <div class="modal-content">
-                            <div class="modal-header border-0 bg-danger text-white">
-                                <h5 class="modal-title">
-                                    <i class="bi bi-shield-lock me-2"></i>
-                                    需要安全连接
-                                </h5>
-                            </div>
-                            <div class="modal-body">
-                                <p class="mb-3">WebRTC视频通话功能需要HTTPS安全连接才能正常工作。</p>
-                                <div class="alert alert-info">
-                                    <i class="bi bi-info-circle me-2"></i>
-                                    <strong>建议：</strong>切换到HTTPS版本以获得完整功能体验
-                                </div>
-                            </div>
-                            <div class="modal-footer border-0">
-                                <a href="https://${location.hostname}:8443${location.pathname}" 
-                                   class="btn btn-primary">
-                                    <i class="bi bi-shield-check me-1"></i>
-                                    切换到HTTPS
-                                </a>
-                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
-                                    继续使用HTTP
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            `;
-            document.body.insertAdjacentHTML('beforeend', modalHtml);
-            const modalElement = document.body.lastElementChild;
-            const bootstrapModal = new bootstrap.Modal(modalElement);
-            bootstrapModal.show();
-        }
-        
-        function getBrowserInfo() {
-            const ua = navigator.userAgent;
-            if (ua.indexOf('Chrome') > -1) return 'Chrome';
-            if (ua.indexOf('Firefox') > -1) return 'Firefox';
-            if (ua.indexOf('Safari') > -1) return 'Safari';
-            if (ua.indexOf('Edge') > -1) return 'Edge';
-            return '未知浏览器';
-        }
-        
-        // Service Worker注册（PWA支持）
-        if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('sw.js').catch(console.log);
-        }
-
-        // 全局错误处理
-        window.addEventListener('error', function(e) {
-            console.error('全局错误:', e.error);
-        });
-        
-        window.addEventListener('unhandledrejection', function(e) {
-            console.error('未处理的Promise拒绝:', e.reason);
-        });
-    </script>
+    <script src="js/home.js"></script>
 </body>
 </html>
