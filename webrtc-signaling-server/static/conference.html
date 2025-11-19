@@ -4,16 +4,24 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>LiveKit 视频会议</title>
-    <!-- Version: 2.2.0 - Compact layout -->
     
+    <!-- Google Fonts: Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    
+    <!-- Bootstrap & Icons -->
     <link href="bootstrap-5.3.8-dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
-    <link rel="stylesheet" href="css/conference.css">
+    
+    <!-- App Styles -->
+    <link rel="stylesheet" href="css/conference.css?v=20251119">
 </head>
 <body class="conference-page">
     <div class="layout">
-        <!-- 左侧：我的画面 + 参会者缩略图 -->
+        <!-- Sidebar / Rail -->
         <section class="rail">
+            <!-- Local User -->
             <div class="rail-local">
                 <div class="rail-header">
                     <span>我的画面</span>
@@ -29,102 +37,134 @@
                     </div>
                 </div>
             </div>
+
+            <!-- Remote Participants -->
             <div class="rail-remote">
                 <div class="rail-header">
                     <span>会议成员</span>
                     <span id="railCount" class="count-pill">0</span>
                 </div>
-                <div id="videoGrid" class="rail-list"></div>
-                <div id="railEmptyHint" class="rail-empty">等待其他人员加入</div>
+                
+                <!-- Scrollable Container -->
+                <div id="videoGrid" class="rail-list">
+                    <!-- Remote videos will be injected here -->
+                </div>
+                
+                <div id="railEmptyHint" class="rail-empty">
+                    等待其他人加入...
+                </div>
             </div>
         </section>
 
-        <!-- 中间舞台 -->
+        <!-- Main Stage -->
         <main class="stage">
             <header class="stage-bar">
                 <div class="stage-info">
                     <div class="stage-room">
-                        <span class="label">会议号</span>
-                        <strong id="roomName">视频会议</strong>
+                        <span class="label">正在进行</span>
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <strong id="roomName">视频会议</strong>
+                            <span id="connectionStateText" class="state-pill">准备中</span>
+                        </div>
                     </div>
                     <div class="stage-meta">
-                        <span id="participantCount" class="count-pill">1</span>
-                        <span id="connectionStateText" class="state-pill">准备中</span>
+                        <span id="participantCount" class="count-pill">1人在线</span>
                         <span id="callTimer" class="state-pill muted">00:00</span>
-                        <span id="screenShareIndicator" class="state-pill muted">屏幕共享</span>
+                        <span id="screenShareIndicator" class="state-pill muted" style="display: none;">屏幕共享</span>
                     </div>
                 </div>
                 <div class="stage-network">
                     <span id="connectionStatus" class="status-dot"></span>
-                    <span id="networkQuality">良好</span>
+                    <span id="networkQuality" style="font-size: 13px; color: var(--muted);">检测中</span>
+                    <div style="width: 1px; height: 16px; background: var(--border); margin: 0 12px;"></div>
                     <button id="shareBtn" class="plain-btn">
-                        <i class="bi bi-share"></i> 分享链接
+                        <i class="bi bi-share-fill"></i> 邀请
                     </button>
                 </div>
             </header>
 
+            <!-- Video Surface -->
             <div class="stage-view" id="stageSurface">
                 <video id="stageVideo" autoplay playsinline></video>
+                
                 <div id="emptyState" class="stage-empty">
-                    <i class="bi bi-people"></i>
-                    <p>等待其他成员加入</p>
+                    <div style="width: 80px; height: 80px; background: rgba(255,255,255,0.05); border-radius: 50%; display: flex; align-items: center; justify-content: center; margin-bottom: 16px;">
+                        <i class="bi bi-people" style="font-size: 32px; opacity: 0.8;"></i>
+                    </div>
+                    <h3>等待成员加入</h3>
+                    <p>邀请其他人加入会议以开始视频通话</p>
+                    <button id="copyStageBtn" class="plain-btn" style="background: rgba(255,255,255,0.1); margin-top: 8px;">
+                        <i class="bi bi-link-45deg"></i> 复制邀请链接
+                    </button>
                 </div>
+
                 <div class="stage-label">
-                    <span id="stageLabel">尚未选定</span>
-                    <button id="resetSpotlightBtn" class="plain-btn">
-                        <i class="bi bi-bullseye"></i> 自动跟随
+                    <span id="stageLabel">自动跟随发言者</span>
+                    <button id="resetSpotlightBtn" class="plain-btn" style="padding: 2px 8px; font-size: 11px; background: rgba(255,255,255,0.1); border-radius: 4px; margin-left: 8px;">
+                        <i class="bi bi-arrow-counterclockwise"></i> 重置
                     </button>
                 </div>
             </div>
 
+            <!-- Bottom Controls -->
             <footer class="controls">
                 <div class="control-buttons">
-                    <button id="micBtn" class="control-btn active"><i class="bi bi-mic-fill"></i></button>
-                    <button id="cameraBtn" class="control-btn active"><i class="bi bi-camera-video-fill"></i></button>
-                    <button id="shareScreenBtn" class="control-btn"><i class="bi bi-display"></i></button>
-                    <button id="participantsBtn" class="control-btn"><i class="bi bi-people"></i></button>
-                    <button id="chatBtn" class="control-btn">
-                        <i class="bi bi-chat-dots"></i>
+                    <button id="micBtn" class="control-btn active" title="麦克风 (Ctrl+D)">
+                        <i class="bi bi-mic-fill"></i>
+                    </button>
+                    <button id="cameraBtn" class="control-btn active" title="摄像头 (Ctrl+E)">
+                        <i class="bi bi-camera-video-fill"></i>
+                    </button>
+                    <button id="shareScreenBtn" class="control-btn" title="共享屏幕">
+                        <i class="bi bi-display"></i>
+                    </button>
+                    <div style="width: 1px; height: 24px; background: rgba(255,255,255,0.1); margin: 0 4px;"></div>
+                    <button id="chatBtn" class="control-btn" title="聊天">
+                        <i class="bi bi-chat-dots-fill"></i>
                         <span id="chatBtnBadge" class="badge">0</span>
                     </button>
-                </div>
-                <div class="control-actions">
-                    <button id="copyStageBtn" class="plain-btn"><i class="bi bi-link-45deg"></i> 复制链接</button>
-                    <button id="leaveBtn" class="control-btn danger"><i class="bi bi-telephone-x"></i></button>
+                    <button id="participantsBtn" class="control-btn" title="成员列表">
+                        <i class="bi bi-people-fill"></i>
+                    </button>
+                    <div style="width: 1px; height: 24px; background: rgba(255,255,255,0.1); margin: 0 4px;"></div>
+                    <button id="leaveBtn" class="control-btn danger" title="离开会议">
+                        <i class="bi bi-telephone-x-fill"></i>
+                    </button>
                 </div>
             </footer>
         </main>
 
-        <!-- 右侧浮动面板 -->
+        <!-- Right Panel (Chat/Participants) -->
         <aside id="utilityPanel" class="utility-panel">
             <div class="panel-tabs">
                 <button id="panelParticipantsTab" class="panel-tab active" data-target="participants">
-                    <i class="bi bi-people"></i>
+                    <i class="bi bi-people"></i> 成员
                 </button>
                 <button id="panelChatTab" class="panel-tab" data-target="chat">
-                    <i class="bi bi-chat-text"></i>
+                    <i class="bi bi-chat-text"></i> 聊天
                 </button>
             </div>
             <div class="panel-content">
                 <div id="panelParticipants" class="panel-pane active">
                     <header>
-                        <h4>参会者</h4>
-                        <span id="sidebarParticipantCount">0</span>
+                        <h4>会议成员 (<span id="sidebarParticipantCount">0</span>)</h4>
                     </header>
                     <div id="participantsList" class="scroll-area"></div>
                 </div>
                 <div id="panelChat" class="panel-pane">
                     <header>
-                        <h4>会议聊天</h4>
-                        <button id="collapseChatBtn" class="plain-btn small"><i class="bi bi-x"></i></button>
+                        <h4>消息记录</h4>
+                        <button id="collapseChatBtn" class="plain-btn small"><i class="bi bi-x-lg"></i></button>
                     </header>
                     <div id="chatMessages" class="scroll-area chat"></div>
-                    <div id="typingIndicator" class="typing-indicator"></div>
+                    <div id="typingIndicator" class="typing-indicator" style="padding: 0 4px; font-size: 11px; color: var(--muted); min-height: 20px;"></div>
                     <div class="chat-composer">
-                        <textarea id="chatInput" placeholder="输入消息，Enter发送 / Shift+Enter换行"></textarea>
+                        <textarea id="chatInput" placeholder="输入消息..."></textarea>
                         <div class="composer-actions">
-                            <span>Enter 发送</span>
-                            <button id="chatSendBtn" class="plain-btn"><i class="bi bi-send"></i> 发送</button>
+                            <span>按 Enter 发送</span>
+                            <button id="chatSendBtn" class="plain-btn" style="font-size: 12px; padding: 4px 8px; background: rgba(255,255,255,0.1);">
+                                <i class="bi bi-send-fill"></i>
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -132,22 +172,23 @@
         </aside>
     </div>
 
+    <!-- Overlays -->
     <div id="loadingOverlay" class="loading-overlay">
-        <div class="loading-content">
-            <div class="spinner"></div>
-            <p id="loadingText">正在连接会议...</p>
-        </div>
+        <div class="spinner"></div>
+        <p id="loadingText" style="color: var(--muted); font-size: 14px;">正在连接...</p>
     </div>
 
     <div id="toastContainer" class="toast-container"></div>
 
+    <!-- Scripts -->
     <script src="livekit/livekit-client.umd.min.js"></script>
     <script src="bootstrap-5.3.8-dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        console.log('🔄 强制加载最新脚本，时间戳:', Date.now());
+        // Force latest version for development
+        const v = Date.now();
+        document.write(`<script src="js/conference-manager.js?v=${v}"><\/script>`);
+        document.write(`<script src="js/conference-ui.js?v=${v}"><\/script>`);
+        document.write(`<script src="js/conference-app.js?v=${v}"><\/script>`);
     </script>
-    <script src="js/conference-manager.js?v=20251116180000"></script>
-    <script src="js/conference-ui.js?v=20251116180000"></script>
-    <script src="js/conference-app.js?v=20251116180000"></script>
 </body>
 </html>

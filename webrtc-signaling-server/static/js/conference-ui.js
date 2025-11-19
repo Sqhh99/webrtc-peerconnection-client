@@ -741,6 +741,7 @@ class ConferenceUI {
             <video autoplay playsinline muted></video>
             <div class="participant-info">
                 <div class="name-badge">
+                    <div class="connection-indicator" title="网络质量"></div>
                     <i class="bi bi-mic-fill audio-indicator"></i>
                     <span>${this.escapeHtml(participant.identity)}</span>
                 </div>
