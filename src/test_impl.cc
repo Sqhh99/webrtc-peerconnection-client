@@ -4,8 +4,6 @@
 
 #include <memory>
 #include <optional>
-#include <string>
-#include <string_view>
 
 #include "absl/memory/memory.h"
 #include "api/scoped_refptr.h"
@@ -14,7 +12,6 @@
 #include "api/video/i420_buffer.h"
 #include "api/video/video_frame.h"
 #include "api/video/video_frame_buffer.h"
-#include "json/value.h"
 #include "rtc_base/time_utils.h"
 #include "system_wrappers/include/clock.h"
 #include "test/frame_generator.h"
@@ -42,51 +39,4 @@ std::unique_ptr<FrameGeneratorInterface> CreateSquareFrameGenerator(
 }
 
 }  // namespace test
-}  // namespace webrtc
-
-// JSON utility functions implementation
-namespace webrtc {
-
-bool GetStringFromJsonObject(const Json::Value& in,
-                              std::string_view k,
-                              std::string* out) {
-  if (!in.isObject()) {
-    return false;
-  }
-  
-  std::string key(k);
-  if (!in.isMember(key)) {
-    return false;
-  }
-  
-  const Json::Value& value = in[key];
-  if (!value.isString()) {
-    return false;
-  }
-  
-  *out = value.asString();
-  return true;
-}
-
-bool GetIntFromJsonObject(const Json::Value& in,
-                          std::string_view k,
-                          int* out) {
-  if (!in.isObject()) {
-    return false;
-  }
-  
-  std::string key(k);
-  if (!in.isMember(key)) {
-    return false;
-  }
-  
-  const Json::Value& value = in[key];
-  if (!value.isInt()) {
-    return false;
-  }
-  
-  *out = value.asInt();
-  return true;
-}
-
 }  // namespace webrtc

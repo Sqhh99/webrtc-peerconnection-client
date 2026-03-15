@@ -1,0 +1,53 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+env:
+  WEBRTC_VERSION: m146.7680.1.0
+  WEBRTC_PLATFORM: windows_x86_64
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: cmd
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Qt 6.10.0
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.10.0"
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          cache: true
+
+      - name: Cache WebRTC prebuilts
+        uses: actions/cache@v4
+        with:
+          path: |
+            third_party/_downloads
+            third_party/webrtc
+          key: webrtc-${{ runner.os }}-${{ env.WEBRTC_VERSION }}-${{ env.WEBRTC_PLATFORM }}
+
+      - name: Build Release
+        run: |
+          set QT_ROOT=%QT_ROOT_DIR%
+          call build.cmd release
+
+      - name: Upload executable
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: peerconnection-client-windows-release
+          path: |
+            build/release/peerconnection_client.exe
+            build/release/peerconnection_client.pdb
+          if-no-files-found: error

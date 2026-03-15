@@ -38,6 +38,8 @@ CMakeFiles/
 cmake_install.cmake
 Makefile
 *.cmake
+!cmake/
+!cmake/*.cmake
 
 # Visual Studio
 *.vcxproj
