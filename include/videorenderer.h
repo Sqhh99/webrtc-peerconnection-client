@@ -24,6 +24,7 @@ class VideoRenderer : public webrtc::VideoSinkInterface<webrtc::VideoFrame> {
 
   void SetVideoTrack(webrtc::VideoTrackInterface* track_to_render);
   void Stop();
+  void Clear();
   std::optional<Frame> ConsumeLatestFrame();
 
   // webrtc::VideoSinkInterface implementation

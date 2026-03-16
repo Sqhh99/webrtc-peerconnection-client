@@ -108,8 +108,13 @@ class WebRTCEngine {
 
   void SetRemoteDescription(const std::string& type, const std::string& sdp);
   void ProcessPendingIceCandidates();
+  void LogRemoteMediaState(const char* reason) const;
+  void PublishRemoteTracks(const char* reason);
+  void PublishRemoteVideoTrack(webrtc::VideoTrackInterface* track,
+                               const char* reason);
   void OnPeerConnectionIceCandidate(const webrtc::IceCandidate* candidate);
   void OnPeerConnectionIceConnectionChange(webrtc::PeerConnectionInterface::IceConnectionState state);
+  void OnPeerConnectionTrack(webrtc::RtpTransceiverInterface* transceiver);
   void OnPeerConnectionAddTrack(webrtc::RtpReceiverInterface* receiver);
   void OnPeerConnectionRemoveTrack(webrtc::RtpReceiverInterface* receiver);
   void OnSessionDescriptionSuccess(webrtc::SessionDescriptionInterface* desc, bool is_offer);
@@ -135,6 +140,7 @@ class WebRTCEngine {
   webrtc::scoped_refptr<ManagedVideoTrackSource> video_source_;
   webrtc::scoped_refptr<webrtc::VideoTrackInterface> local_video_track_;
   webrtc::scoped_refptr<webrtc::AudioTrackInterface> local_audio_track_;
+  webrtc::scoped_refptr<webrtc::VideoTrackInterface> remote_video_track_;
   webrtc::scoped_refptr<webrtc::RtpSenderInterface> video_sender_;
   webrtc::scoped_refptr<webrtc::RtpSenderInterface> audio_sender_;
   

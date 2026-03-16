@@ -8,6 +8,7 @@
 
 #include "api/environment/environment.h"
 #include "api/environment/environment_factory.h"
+#include "rtc_base/logging.h"
 #include "rtc_base/physical_socket_server.h"
 #include "rtc_base/ssl_adapter.h"
 #include "rtc_base/thread.h"
@@ -119,6 +120,11 @@ int main(int argc, char* argv[]) {
     PrintUsage(argv[0]);
     return 1;
   }
+
+  webrtc::LogMessage::LogToDebug(webrtc::LS_INFO);
+  webrtc::LogMessage::SetLogToStderr(true);
+  webrtc::LogMessage::LogTimestamps();
+  webrtc::LogMessage::LogThreads();
 
   webrtc::WinsockInitializer winsock_init;
   webrtc::PhysicalSocketServer socket_server;

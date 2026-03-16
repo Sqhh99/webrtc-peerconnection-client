@@ -67,10 +67,17 @@ class CallCoordinator : public WebRTCEngineObserver,
   void OnIceServersReceived(const std::vector<IceServerConfig>& ice_servers) override;
   void OnClientListUpdate(const std::vector<ClientInfo>& clients) override;
   void OnUserOffline(const std::string& client_id) override;
-  void OnCallRequest(const std::string& from) override;
-  void OnCallResponse(const std::string& from, bool accepted, const std::string& reason) override;
-  void OnCallCancel(const std::string& from, const std::string& reason) override;
-  void OnCallEnd(const std::string& from, const std::string& reason) override;
+  void OnCallRequest(const std::string& from, const std::string& call_id) override;
+  void OnCallResponse(const std::string& from,
+                      const std::string& call_id,
+                      bool accepted,
+                      const std::string& reason) override;
+  void OnCallCancel(const std::string& from,
+                    const std::string& call_id,
+                    const std::string& reason) override;
+  void OnCallEnd(const std::string& from,
+                 const std::string& call_id,
+                 const std::string& reason) override;
   void OnOffer(const std::string& from, const SessionDescriptionPayload& sdp) override;
   void OnAnswer(const std::string& from, const SessionDescriptionPayload& sdp) override;
   void OnIceCandidate(const std::string& from, const IceCandidatePayload& candidate) override;

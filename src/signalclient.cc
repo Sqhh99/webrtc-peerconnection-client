@@ -29,6 +29,7 @@ using tcp = asio::ip::tcp;
 SessionDescriptionPayload ParseSessionDescription(const json& payload,
                                                   const std::string& fallback_type) {
   SessionDescriptionPayload result;
+  result.call_id = payload.value("callId", payload.value("call_id", ""));
   result.type = fallback_type;
 
   if (payload.contains("sdp")) {
@@ -52,6 +53,7 @@ SessionDescriptionPayload ParseSessionDescription(const json& payload,
 
 IceCandidatePayload ParseIceCandidate(const json& payload) {
   IceCandidatePayload result;
+  result.call_id = payload.value("callId", payload.value("call_id", ""));
 
   const json* candidate_payload = &payload;
   if (payload.contains("candidate") && payload.at("candidate").is_object()) {
@@ -217,12 +219,14 @@ void SignalClient::RegisterObserver(SignalClientObserver* observer) {
   observer_ = observer;
 }
 
-void SignalClient::SendCallRequest(const std::string& to) {
+void SignalClient::SendCallRequest(const std::string& to,
+                                   const std::string& call_id) {
   json message = {
       {"type", "call-request"},
       {"from", GetClientId()},
       {"to", to},
-      {"payload", {{"timestamp",
+      {"payload", {{"callId", call_id},
+                   {"timestamp",
                     std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::system_clock::now().time_since_epoch())
                         .count()}}}};
@@ -230,9 +234,10 @@ void SignalClient::SendCallRequest(const std::string& to) {
 }
 
 void SignalClient::SendCallResponse(const std::string& to,
+                                    const std::string& call_id,
                                     bool accepted,
                                     const std::string& reason) {
-  json payload = {{"accepted", accepted}};
+  json payload = {{"callId", call_id}, {"accepted", accepted}};
   if (!reason.empty()) {
     payload["reason"] = reason;
   }
@@ -245,8 +250,9 @@ void SignalClient::SendCallResponse(const std::string& to,
 }
 
 void SignalClient::SendCallCancel(const std::string& to,
+                                  const std::string& call_id,
                                   const std::string& reason) {
-  json payload = json::object();
+  json payload = {{"callId", call_id}};
   if (!reason.empty()) {
     payload["reason"] = reason;
   }
@@ -259,8 +265,9 @@ void SignalClient::SendCallCancel(const std::string& to,
 }
 
 void SignalClient::SendCallEnd(const std::string& to,
+                               const std::string& call_id,
                                const std::string& reason) {
-  json payload = json::object();
+  json payload = {{"callId", call_id}};
   if (!reason.empty()) {
     payload["reason"] = reason;
   }
@@ -278,7 +285,9 @@ void SignalClient::SendOffer(const std::string& to,
       {"type", "offer"},
       {"from", GetClientId()},
       {"to", to},
-      {"payload", {{"sdp", {{"type", sdp.type}, {"sdp", sdp.sdp}}}}}};
+      {"payload",
+       {{"callId", sdp.call_id},
+        {"sdp", {{"type", sdp.type}, {"sdp", sdp.sdp}}}}}};
   QueueJsonMessage(message.dump());
 }
 
@@ -288,7 +297,9 @@ void SignalClient::SendAnswer(const std::string& to,
       {"type", "answer"},
       {"from", GetClientId()},
       {"to", to},
-      {"payload", {{"sdp", {{"type", sdp.type}, {"sdp", sdp.sdp}}}}}};
+      {"payload",
+       {{"callId", sdp.call_id},
+        {"sdp", {{"type", sdp.type}, {"sdp", sdp.sdp}}}}}};
   QueueJsonMessage(message.dump());
 }
 
@@ -298,7 +309,8 @@ void SignalClient::SendIceCandidate(const std::string& to,
                   {"from", GetClientId()},
                   {"to", to},
                   {"payload",
-                   {{"candidate",
+                   {{"callId", candidate.call_id},
+                    {"candidate",
                      {{"sdpMid", candidate.sdp_mid},
                       {"sdpMLineIndex", candidate.sdp_mline_index},
                       {"candidate", candidate.candidate}}}}}};
@@ -559,17 +571,27 @@ void SignalClient::HandleIncomingMessage(const std::string& message) {
       observer->OnUserOffline(message_payload.value("clientId", ""));
       break;
     case SignalMessageType::CallRequest:
-      observer->OnCallRequest(from);
+      observer->OnCallRequest(
+          from, message_payload.value("callId", message_payload.value("call_id", "")));
       break;
     case SignalMessageType::CallResponse:
-      observer->OnCallResponse(from, message_payload.value("accepted", false),
-                               message_payload.value("reason", ""));
+      observer->OnCallResponse(
+          from,
+          message_payload.value("callId", message_payload.value("call_id", "")),
+          message_payload.value("accepted", false),
+          message_payload.value("reason", ""));
       break;
     case SignalMessageType::CallCancel:
-      observer->OnCallCancel(from, message_payload.value("reason", ""));
+      observer->OnCallCancel(
+          from,
+          message_payload.value("callId", message_payload.value("call_id", "")),
+          message_payload.value("reason", ""));
       break;
     case SignalMessageType::CallEnd:
-      observer->OnCallEnd(from, message_payload.value("reason", ""));
+      observer->OnCallEnd(
+          from,
+          message_payload.value("callId", message_payload.value("call_id", "")),
+          message_payload.value("reason", ""));
       break;
     case SignalMessageType::Offer:
       observer->OnOffer(from, ParseSessionDescription(message_payload, "offer"));

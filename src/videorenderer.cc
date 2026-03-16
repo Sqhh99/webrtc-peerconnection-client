@@ -25,7 +25,23 @@ void VideoRenderer::SetVideoTrack(webrtc::VideoTrackInterface* track_to_render) 
 }
 
 void VideoRenderer::Stop() {
-  SetVideoTrack(nullptr);
+  std::lock_guard<std::mutex> lock(mutex_);
+
+  if (rendered_track_) {
+    rendered_track_->RemoveSink(this);
+    rendered_track_ = nullptr;
+  }
+
+  latest_frame_ = Frame{};
+  latest_frame_.frame_id = next_frame_id_++;
+  frame_dirty_ = true;
+}
+
+void VideoRenderer::Clear() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  latest_frame_ = Frame{};
+  latest_frame_.frame_id = next_frame_id_++;
+  frame_dirty_ = true;
 }
 
 std::optional<VideoRenderer::Frame> VideoRenderer::ConsumeLatestFrame() {

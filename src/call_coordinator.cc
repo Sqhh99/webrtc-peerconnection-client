@@ -225,23 +225,35 @@ void CallCoordinator::OnIceConnectionStateChanged(
 }
 
 void CallCoordinator::OnOfferCreated(const std::string& sdp) {
-  if (signal_client_) {
-    signal_client_->SendOffer(current_peer_id_, {"offer", sdp});
+  if (signal_client_ && call_manager_) {
+    SessionDescriptionPayload payload;
+    payload.call_id = call_manager_->GetCurrentCallId();
+    payload.type = "offer";
+    payload.sdp = sdp;
+    signal_client_->SendOffer(current_peer_id_, payload);
   }
 }
 
 void CallCoordinator::OnAnswerCreated(const std::string& sdp) {
-  if (signal_client_) {
-    signal_client_->SendAnswer(current_peer_id_, {"answer", sdp});
+  if (signal_client_ && call_manager_) {
+    SessionDescriptionPayload payload;
+    payload.call_id = call_manager_->GetCurrentCallId();
+    payload.type = "answer";
+    payload.sdp = sdp;
+    signal_client_->SendAnswer(current_peer_id_, payload);
   }
 }
 
 void CallCoordinator::OnIceCandidateGenerated(const std::string& sdp_mid,
                                               int sdp_mline_index,
                                               const std::string& candidate) {
-  if (signal_client_) {
-    signal_client_->SendIceCandidate(current_peer_id_,
-                                     {sdp_mid, sdp_mline_index, candidate});
+  if (signal_client_ && call_manager_) {
+    IceCandidatePayload payload;
+    payload.call_id = call_manager_->GetCurrentCallId();
+    payload.sdp_mid = sdp_mid;
+    payload.sdp_mline_index = sdp_mline_index;
+    payload.candidate = candidate;
+    signal_client_->SendIceCandidate(current_peer_id_, payload);
   }
 }
 
@@ -298,31 +310,35 @@ void CallCoordinator::OnUserOffline(const std::string& client_id) {
   }
 }
 
-void CallCoordinator::OnCallRequest(const std::string& from) {
+void CallCoordinator::OnCallRequest(const std::string& from,
+                                    const std::string& call_id) {
   if (call_manager_) {
-    call_manager_->HandleCallRequest(from);
+    call_manager_->HandleCallRequest(from, call_id);
   }
 }
 
 void CallCoordinator::OnCallResponse(const std::string& from,
+                                     const std::string& call_id,
                                      bool accepted,
                                      const std::string& reason) {
   if (call_manager_) {
-    call_manager_->HandleCallResponse(from, accepted, reason);
+    call_manager_->HandleCallResponse(from, call_id, accepted, reason);
   }
 }
 
 void CallCoordinator::OnCallCancel(const std::string& from,
+                                   const std::string& call_id,
                                    const std::string& reason) {
   if (call_manager_) {
-    call_manager_->HandleCallCancel(from, reason);
+    call_manager_->HandleCallCancel(from, call_id, reason);
   }
 }
 
 void CallCoordinator::OnCallEnd(const std::string& from,
+                                const std::string& call_id,
                                 const std::string& reason) {
   if (call_manager_) {
-    call_manager_->HandleCallEnd(from, reason);
+    call_manager_->HandleCallEnd(from, call_id, reason);
   }
 }
 
@@ -343,6 +359,9 @@ void CallCoordinator::OnIceCandidate(const std::string& from,
 
 void CallCoordinator::OnCallStateChanged(CallState state,
                                          const std::string& peer_id) {
+  if (state == CallState::Idle) {
+    current_peer_id_.clear();
+  }
   if (ui_observer_) {
     ui_observer_->OnCallStateChanged(state, peer_id);
   }
@@ -386,11 +405,8 @@ void CallCoordinator::OnCallEnded(const std::string& peer_id,
                                   const std::string& reason) {
   RTC_LOG(LS_INFO) << "Call ended with " << peer_id << ": " << reason;
   if (ui_observer_) {
-    ui_observer_->OnStopLocalRenderer();
-    ui_observer_->OnStopRemoteRenderer();
-  }
-  if (webrtc_engine_) {
-    webrtc_engine_->ClosePeerConnection();
+    ui_observer_->OnLogMessage("Call ended with " + peer_id + ": " + reason,
+                               "info");
   }
 }
 
@@ -444,10 +460,22 @@ void CallCoordinator::OnNeedClosePeerConnection() {
 
 void CallCoordinator::ProcessOffer(const std::string& from,
                                    const SessionDescriptionPayload& sdp) {
+  const std::string current_call_id =
+      call_manager_ ? call_manager_->GetCurrentCallId() : std::string();
+  RTC_LOG(LS_INFO) << "ProcessOffer from=" << from << ", call_id=" << sdp.call_id
+                   << ", current_call_id=" << current_call_id;
   if (!webrtc_engine_->HasPeerConnection()) {
     if (ui_observer_) {
       ui_observer_->OnLogMessage(
           "Received offer before peer connection was created", "error");
+    }
+    return;
+  }
+
+  if (sdp.call_id.empty() || sdp.call_id != current_call_id) {
+    if (ui_observer_) {
+      ui_observer_->OnLogMessage("Ignored stale offer for previous call",
+                                 "warning");
     }
     return;
   }
@@ -464,12 +492,23 @@ void CallCoordinator::ProcessOffer(const std::string& from,
   }
 
   webrtc_engine_->SetRemoteOffer(sdp.sdp);
-  webrtc_engine_->CreateAnswer();
 }
 
 void CallCoordinator::ProcessAnswer(const std::string& from,
                                     const SessionDescriptionPayload& sdp) {
-  if (from != current_peer_id_ || sdp.sdp.empty()) {
+  const std::string current_call_id =
+      call_manager_ ? call_manager_->GetCurrentCallId() : std::string();
+  RTC_LOG(LS_INFO) << "ProcessAnswer from=" << from
+                   << ", call_id=" << sdp.call_id
+                   << ", current_call_id=" << current_call_id
+                   << ", sdp_size=" << sdp.sdp.size();
+  if (from != current_peer_id_ || sdp.sdp.empty() || sdp.call_id.empty() ||
+      sdp.call_id != current_call_id) {
+    if (from == current_peer_id_ && ui_observer_ && !sdp.call_id.empty() &&
+        sdp.call_id != current_call_id) {
+      ui_observer_->OnLogMessage("Ignored stale answer for previous call",
+                                 "warning");
+    }
     return;
   }
   webrtc_engine_->SetRemoteAnswer(sdp.sdp);
@@ -477,7 +516,20 @@ void CallCoordinator::ProcessAnswer(const std::string& from,
 
 void CallCoordinator::ProcessIceCandidate(const std::string& from,
                                           const IceCandidatePayload& candidate) {
-  if (from != current_peer_id_) {
+  const std::string current_call_id =
+      call_manager_ ? call_manager_->GetCurrentCallId() : std::string();
+  RTC_LOG(LS_INFO) << "ProcessIceCandidate from=" << from
+                   << ", call_id=" << candidate.call_id
+                   << ", current_call_id=" << current_call_id
+                   << ", sdp_mid=" << candidate.sdp_mid
+                   << ", mline_index=" << candidate.sdp_mline_index;
+  if (from != current_peer_id_ || candidate.call_id.empty() ||
+      candidate.call_id != current_call_id) {
+    if (from == current_peer_id_ && ui_observer_ && !candidate.call_id.empty() &&
+        candidate.call_id != current_call_id) {
+      ui_observer_->OnLogMessage(
+          "Ignored stale ICE candidate for previous call", "warning");
+    }
     return;
   }
   if (candidate.sdp_mid.empty() || candidate.sdp_mline_index < 0 ||

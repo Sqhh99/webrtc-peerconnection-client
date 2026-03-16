@@ -93,6 +93,7 @@ class SdlApp : public ICallUIObserver {
                        const ImVec2& content_pos,
                        const ImVec2& content_size);
   void RenderDialogs(UiSnapshot* snapshot);
+  void ResetVideoTexture(VideoTexture* texture);
   void UpdateVideoTexture(VideoRenderer* renderer, VideoTexture* texture);
   std::string GetNowString() const;
   std::string GetCallStateLabel(CallState state) const;

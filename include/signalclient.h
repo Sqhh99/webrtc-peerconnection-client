@@ -44,10 +44,17 @@ class SignalClientObserver {
   virtual void OnUserOffline(const std::string& client_id) = 0;
 
   // 呼叫相关
-  virtual void OnCallRequest(const std::string& from) = 0;
-  virtual void OnCallResponse(const std::string& from, bool accepted, const std::string& reason) = 0;
-  virtual void OnCallCancel(const std::string& from, const std::string& reason) = 0;
-  virtual void OnCallEnd(const std::string& from, const std::string& reason) = 0;
+  virtual void OnCallRequest(const std::string& from, const std::string& call_id) = 0;
+  virtual void OnCallResponse(const std::string& from,
+                              const std::string& call_id,
+                              bool accepted,
+                              const std::string& reason) = 0;
+  virtual void OnCallCancel(const std::string& from,
+                            const std::string& call_id,
+                            const std::string& reason) = 0;
+  virtual void OnCallEnd(const std::string& from,
+                         const std::string& call_id,
+                         const std::string& reason) = 0;
 
   // WebRTC信令
   virtual void OnOffer(const std::string& from, const SessionDescriptionPayload& sdp) = 0;
@@ -76,10 +83,17 @@ class SignalClient {
   void RegisterObserver(SignalClientObserver* observer);
 
   // 发送消息
-  void SendCallRequest(const std::string& to);
-  void SendCallResponse(const std::string& to, bool accepted, const std::string& reason = "");
-  void SendCallCancel(const std::string& to, const std::string& reason = "");
-  void SendCallEnd(const std::string& to, const std::string& reason = "");
+  void SendCallRequest(const std::string& to, const std::string& call_id);
+  void SendCallResponse(const std::string& to,
+                        const std::string& call_id,
+                        bool accepted,
+                        const std::string& reason = "");
+  void SendCallCancel(const std::string& to,
+                      const std::string& call_id,
+                      const std::string& reason = "");
+  void SendCallEnd(const std::string& to,
+                   const std::string& call_id,
+                   const std::string& reason = "");
   void SendOffer(const std::string& to, const SessionDescriptionPayload& sdp);
   void SendAnswer(const std::string& to, const SessionDescriptionPayload& sdp);
   void SendIceCandidate(const std::string& to, const IceCandidatePayload& candidate);

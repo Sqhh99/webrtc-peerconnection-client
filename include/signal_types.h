@@ -15,11 +15,13 @@ struct IceServerConfig {
 };
 
 struct SessionDescriptionPayload {
+  std::string call_id;
   std::string type;
   std::string sdp;
 };
 
 struct IceCandidatePayload {
+  std::string call_id;
   std::string sdp_mid;
   int sdp_mline_index = -1;
   std::string candidate;

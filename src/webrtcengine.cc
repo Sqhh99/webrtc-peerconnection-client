@@ -49,6 +49,30 @@ namespace {
 using webrtc::test::TestVideoCapturer;
 namespace fs = std::filesystem;
 
+const char* BoolToString(bool value) {
+  return value ? "true" : "false";
+}
+
+bool HasLocalSenderTrack(
+    const webrtc::scoped_refptr<webrtc::PeerConnectionInterface>&
+        peer_connection,
+    const char* kind) {
+  if (!peer_connection) {
+    return false;
+  }
+
+  for (const auto& sender : peer_connection->GetSenders()) {
+    if (!sender) {
+      continue;
+    }
+    auto track = sender->track();
+    if (track && track->kind() == kind) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // 设置远程描述的观察者
 class SetRemoteDescriptionObserver
     : public webrtc::SetRemoteDescriptionObserverInterface {
@@ -179,8 +203,12 @@ class CapturerTrackSource : public ManagedVideoTrackSource {
 class WebRTCEngine::PeerConnectionObserverImpl : public webrtc::PeerConnectionObserver {
  public:
   explicit PeerConnectionObserverImpl(WebRTCEngine* engine) : engine_(engine) {}
-  
+
   void OnSignalingChange(webrtc::PeerConnectionInterface::SignalingState new_state) override {}
+  void OnTrack(
+      webrtc::scoped_refptr<webrtc::RtpTransceiverInterface> transceiver) override {
+    engine_->OnPeerConnectionTrack(transceiver.get());
+  }
   void OnAddTrack(webrtc::scoped_refptr<webrtc::RtpReceiverInterface> receiver,
                   const std::vector<webrtc::scoped_refptr<webrtc::MediaStreamInterface>>& streams) override {
     engine_->OnPeerConnectionAddTrack(receiver.get());
@@ -515,6 +543,7 @@ void WebRTCEngine::ClosePeerConnection() {
   // 第四步: 释放本地媒体轨道 (释放对source的引用)
   local_video_track_ = nullptr;
   local_audio_track_ = nullptr;
+  remote_video_track_ = nullptr;
   video_sender_ = nullptr;
   audio_sender_ = nullptr;
   local_audio_track_attached_.store(false);
@@ -535,6 +564,9 @@ void WebRTCEngine::ClosePeerConnection() {
   
   // 第六步: 清理观察者和其他资源
   pc_observer_.reset();
+  for (auto* candidate : pending_ice_candidates_) {
+    delete candidate;
+  }
   pending_ice_candidates_.clear();
   
   RTC_LOG(LS_INFO) << "Peer connection closed successfully";
@@ -546,8 +578,12 @@ bool WebRTCEngine::AddTracks() {
     return false;
   }
 
-  if (!peer_connection_->GetSenders().empty()) {
-    RTC_LOG(LS_WARNING) << "Tracks already added";
+  const bool has_video_sender = HasLocalSenderTrack(
+      peer_connection_, webrtc::MediaStreamTrackInterface::kVideoKind);
+  const bool has_audio_sender = HasLocalSenderTrack(
+      peer_connection_, webrtc::MediaStreamTrackInterface::kAudioKind);
+  if (has_video_sender && has_audio_sender) {
+    RTC_LOG(LS_INFO) << "Local audio/video tracks already attached";
     return true;
   }
 
@@ -567,60 +603,67 @@ bool WebRTCEngine::AddTracks() {
     }
   }
 
-  std::string video_source_error;
-  video_source_ = CreateVideoSourceForConfig(source_config, &video_source_error);
-  if (!video_source_) {
-    RTC_LOG(LS_ERROR) << "Failed to create local video source: "
-                      << video_source_error;
-    if (observer_) {
-      observer_->OnError(video_source_error.empty()
-                             ? "Failed to create local video source"
-                             : video_source_error);
+  if (!has_video_sender) {
+    std::string video_source_error;
+    video_source_ =
+        CreateVideoSourceForConfig(source_config, &video_source_error);
+    if (!video_source_) {
+      RTC_LOG(LS_ERROR) << "Failed to create local video source: "
+                        << video_source_error;
+      if (observer_) {
+        observer_->OnError(video_source_error.empty()
+                               ? "Failed to create local video source"
+                               : video_source_error);
+      }
+      return false;
     }
-    return false;
-  }
 
-  local_video_track_ =
-      peer_connection_factory_->CreateVideoTrack(video_source_, "video_label");
-  auto video_result_or_error =
-      peer_connection_->AddTrack(local_video_track_, {"stream_id"});
-  if (!video_result_or_error.ok()) {
-    RTC_LOG(LS_ERROR) << "Failed to add video track: "
-                      << video_result_or_error.error().message();
-    if (observer_) {
-      observer_->OnError("Failed to add video track");
+    local_video_track_ =
+        peer_connection_factory_->CreateVideoTrack(video_source_, "video_label");
+    auto video_result_or_error =
+        peer_connection_->AddTrack(local_video_track_, {"stream_id"});
+    if (!video_result_or_error.ok()) {
+      RTC_LOG(LS_ERROR) << "Failed to add video track: "
+                        << video_result_or_error.error().message();
+      if (observer_) {
+        observer_->OnError("Failed to add video track");
+      }
+      return false;
     }
-    return false;
-  }
 
-  video_sender_ = video_result_or_error.value();
-  {
-    std::lock_guard<std::mutex> lock(video_source_mutex_);
-    local_video_source_state_ =
-        BuildLocalVideoSourceState(source_config, true);
-  }
-  if (observer_) {
-    observer_->OnLocalVideoTrackAdded(local_video_track_.get());
-  }
-
-  // 添加音频轨道
-  webrtc::AudioOptions audio_options;
-  auto audio_source = peer_connection_factory_->CreateAudioSource(audio_options);
-  local_audio_track_ = peer_connection_factory_->CreateAudioTrack("audio_label", audio_source.get());
-  auto result_or_error = peer_connection_->AddTrack(local_audio_track_, {"stream_id"});
-
-  if (!result_or_error.ok()) {
-    RTC_LOG(LS_ERROR) << "Failed to add audio track: "
-                      << result_or_error.error().message();
-    if (observer_) {
-      observer_->OnError("Failed to add audio track");
+    video_sender_ = video_result_or_error.value();
+    {
+      std::lock_guard<std::mutex> lock(video_source_mutex_);
+      local_video_source_state_ =
+          BuildLocalVideoSourceState(source_config, true);
     }
-    return false;
+    if (observer_) {
+      observer_->OnLocalVideoTrackAdded(local_video_track_.get());
+    }
   }
 
-  audio_sender_ = result_or_error.value();
-  local_audio_track_attached_.store(true);
-  RTC_LOG(LS_INFO) << "Local audio track added successfully";
+  if (!has_audio_sender) {
+    webrtc::AudioOptions audio_options;
+    auto audio_source =
+        peer_connection_factory_->CreateAudioSource(audio_options);
+    local_audio_track_ = peer_connection_factory_->CreateAudioTrack(
+        "audio_label", audio_source.get());
+    auto result_or_error =
+        peer_connection_->AddTrack(local_audio_track_, {"stream_id"});
+
+    if (!result_or_error.ok()) {
+      RTC_LOG(LS_ERROR) << "Failed to add audio track: "
+                        << result_or_error.error().message();
+      if (observer_) {
+        observer_->OnError("Failed to add audio track");
+      }
+      return false;
+    }
+
+    audio_sender_ = result_or_error.value();
+    local_audio_track_attached_.store(true);
+    RTC_LOG(LS_INFO) << "Local audio track added successfully";
+  }
 
   return true;
 }
@@ -671,6 +714,8 @@ void WebRTCEngine::SetRemoteDescription(const std::string& type, const std::stri
     return;
   }
 
+  const bool should_create_answer = type == "offer";
+
   webrtc::SdpType sdp_type = (type == "offer") ? webrtc::SdpType::kOffer : webrtc::SdpType::kAnswer;
   webrtc::SdpParseError error;
   auto session_desc = webrtc::CreateSessionDescription(sdp_type, sdp, &error);
@@ -683,7 +728,7 @@ void WebRTCEngine::SetRemoteDescription(const std::string& type, const std::stri
     return;
   }
 
-  auto observer = SetRemoteDescriptionObserver::Create([this](webrtc::RTCError error) {
+  auto observer = SetRemoteDescriptionObserver::Create([this, should_create_answer](webrtc::RTCError error) {
     if (!error.ok()) {
       RTC_LOG(LS_ERROR) << "SetRemoteDescription failed: " << error.message();
       if (observer_) {
@@ -692,14 +737,26 @@ void WebRTCEngine::SetRemoteDescription(const std::string& type, const std::stri
     } else {
       RTC_LOG(LS_INFO) << "SetRemoteDescription succeeded";
       ProcessPendingIceCandidates();
+      PublishRemoteTracks(should_create_answer ? "set-remote-offer"
+                                               : "set-remote-answer");
+      LogRemoteMediaState(should_create_answer ? "after-set-remote-offer"
+                                               : "after-set-remote-answer");
+      if (should_create_answer) {
+        if (!AddTracks()) {
+          RTC_LOG(LS_ERROR)
+              << "Failed to ensure local tracks before answering";
+          return;
+        }
+        CreateAnswer();
+      }
     }
   });
 
   peer_connection_->SetRemoteDescription(std::move(session_desc), observer);
 }
 
-void WebRTCEngine::AddIceCandidate(const std::string& sdp_mid, 
-                                    int sdp_mline_index, 
+void WebRTCEngine::AddIceCandidate(const std::string& sdp_mid,
+                                    int sdp_mline_index,
                                     const std::string& candidate) {
   if (!peer_connection_) {
     RTC_LOG(LS_WARNING) << "Cannot add ICE candidate: no peer connection";
@@ -722,7 +779,10 @@ void WebRTCEngine::AddIceCandidate(const std::string& sdp_mid,
   }
 
   if (!peer_connection_->AddIceCandidate(ice_candidate.get())) {
-    RTC_LOG(LS_ERROR) << "Failed to add ICE candidate";
+    RTC_LOG(LS_WARNING)
+        << "Failed to add ICE candidate immediately, queueing for retry";
+    pending_ice_candidates_.push_back(ice_candidate.release());
+    return;
   }
 }
 
@@ -731,13 +791,138 @@ void WebRTCEngine::ProcessPendingIceCandidates() {
     return;
   }
 
-  for (const auto* candidate : pending_ice_candidates_) {
+  std::deque<webrtc::IceCandidate*> remaining_candidates;
+  for (auto* candidate : pending_ice_candidates_) {
     if (!peer_connection_->AddIceCandidate(candidate)) {
-      RTC_LOG(LS_ERROR) << "Failed to add pending ICE candidate";
+      RTC_LOG(LS_WARNING)
+          << "Failed to add pending ICE candidate, keeping for retry";
+      remaining_candidates.push_back(candidate);
+      continue;
     }
     delete candidate;
   }
-  pending_ice_candidates_.clear();
+  pending_ice_candidates_.swap(remaining_candidates);
+}
+
+void WebRTCEngine::LogRemoteMediaState(const char* reason) const {
+  if (!peer_connection_) {
+    RTC_LOG(LS_INFO) << "Remote media state [" << reason
+                     << "]: no peer connection";
+    return;
+  }
+
+  const auto receivers = peer_connection_->GetReceivers();
+  RTC_LOG(LS_INFO) << "Remote media state [" << reason
+                   << "]: receivers=" << receivers.size()
+                   << ", has_remote_description="
+                   << BoolToString(peer_connection_->remote_description() !=
+                                   nullptr)
+                   << ", published_remote_video_track="
+                   << (remote_video_track_ ? remote_video_track_->id()
+                                           : std::string("<none>"));
+  for (size_t i = 0; i < receivers.size(); ++i) {
+    const auto& receiver = receivers[i];
+    if (!receiver) {
+      RTC_LOG(LS_INFO) << "  receiver[" << i << "]=<null>";
+      continue;
+    }
+
+    auto track = receiver->track();
+    RTC_LOG(LS_INFO) << "  receiver[" << i << "] id=" << receiver->id()
+                     << ", has_track=" << BoolToString(track != nullptr);
+    if (track) {
+      RTC_LOG(LS_INFO) << "    track kind=" << track->kind()
+                       << ", id=" << track->id()
+                       << ", enabled=" << BoolToString(track->enabled())
+                       << ", state=" << static_cast<int>(track->state());
+    }
+  }
+
+  const auto transceivers = peer_connection_->GetTransceivers();
+  RTC_LOG(LS_INFO) << "  transceivers=" << transceivers.size();
+  for (size_t i = 0; i < transceivers.size(); ++i) {
+    const auto& transceiver = transceivers[i];
+    if (!transceiver) {
+      RTC_LOG(LS_INFO) << "  transceiver[" << i << "]=<null>";
+      continue;
+    }
+
+    auto receiver = transceiver->receiver();
+    auto sender = transceiver->sender();
+    auto receiver_track = receiver ? receiver->track() : nullptr;
+    auto sender_track = sender ? sender->track() : nullptr;
+    RTC_LOG(LS_INFO) << "  transceiver[" << i << "] mid="
+                     << (transceiver->mid() ? *transceiver->mid()
+                                            : std::string("<unset>"))
+                     << ", receiver_id="
+                     << (receiver ? receiver->id() : std::string("<none>"))
+                     << ", receiver_track_kind="
+                     << (receiver_track ? receiver_track->kind()
+                                        : std::string("<none>"))
+                     << ", receiver_track_id="
+                     << (receiver_track ? receiver_track->id()
+                                        : std::string("<none>"))
+                     << ", sender_track_kind="
+                     << (sender_track ? sender_track->kind()
+                                      : std::string("<none>"))
+                     << ", sender_track_id="
+                     << (sender_track ? sender_track->id()
+                                      : std::string("<none>"));
+  }
+}
+
+void WebRTCEngine::PublishRemoteVideoTrack(webrtc::VideoTrackInterface* track,
+                                           const char* reason) {
+  if (!track) {
+    return;
+  }
+
+  if (remote_video_track_.get() == track) {
+    RTC_LOG(LS_INFO) << "Remote video track already published via " << reason
+                     << ": " << track->id();
+    return;
+  }
+
+  remote_video_track_ = track;
+  RTC_LOG(LS_INFO) << "Publishing remote video track via " << reason << ": "
+                   << track->id();
+  if (observer_) {
+    observer_->OnRemoteVideoTrackAdded(track);
+  }
+}
+
+void WebRTCEngine::PublishRemoteTracks(const char* reason) {
+  if (!peer_connection_) {
+    return;
+  }
+
+  bool found_remote_video = false;
+  for (const auto& receiver : peer_connection_->GetReceivers()) {
+    if (!receiver) {
+      continue;
+    }
+
+    auto track = receiver->track();
+    if (!track) {
+      continue;
+    }
+
+    if (track->kind() == webrtc::MediaStreamTrackInterface::kVideoKind) {
+      auto* video_track = static_cast<webrtc::VideoTrackInterface*>(track.get());
+      found_remote_video = true;
+      PublishRemoteVideoTrack(video_track, reason);
+      break;
+    }
+  }
+
+  if (!found_remote_video && remote_video_track_) {
+    RTC_LOG(LS_INFO) << "No remote video receiver found via " << reason
+                     << ", clearing published remote track";
+    remote_video_track_ = nullptr;
+    if (observer_) {
+      observer_->OnRemoteVideoTrackRemoved();
+    }
+  }
 }
 
 bool WebRTCEngine::IsConnected() const {
@@ -879,15 +1064,51 @@ WebRTCEngine::AudioTransportState WebRTCEngine::GetAudioTransportState() const {
 // 内部回调方法 - 从观察者类调用
 // ============================================================================
 
+void WebRTCEngine::OnPeerConnectionTrack(
+    webrtc::RtpTransceiverInterface* transceiver) {
+  if (!transceiver) {
+    RTC_LOG(LS_WARNING) << "OnTrack fired without a transceiver";
+    return;
+  }
+
+  auto receiver = transceiver->receiver();
+  if (!receiver) {
+    RTC_LOG(LS_WARNING) << "OnTrack fired without a receiver";
+    return;
+  }
+
+  auto track = receiver->track();
+  if (!track) {
+    RTC_LOG(LS_WARNING) << "OnTrack fired without a media track";
+    return;
+  }
+
+  RTC_LOG(LS_INFO) << "OnTrack fired for kind=" << track->kind()
+                   << ", id=" << track->id();
+  LogRemoteMediaState("on-track");
+  if (track->kind() == webrtc::MediaStreamTrackInterface::kVideoKind) {
+    PublishRemoteVideoTrack(
+        static_cast<webrtc::VideoTrackInterface*>(track.get()), "on-track");
+  } else if (track->kind() == webrtc::MediaStreamTrackInterface::kAudioKind) {
+    remote_audio_track_attached_.store(true);
+    RTC_LOG(LS_INFO) << "Remote audio track attached via on-track: "
+                     << track->id();
+  }
+}
+
 void WebRTCEngine::OnPeerConnectionAddTrack(webrtc::RtpReceiverInterface* receiver) {
   RTC_LOG(LS_INFO) << "Track added: " << receiver->id();
-  auto* track = receiver->track().get();
+  auto track_ref = receiver->track();
+  if (!track_ref) {
+    RTC_LOG(LS_WARNING) << "Track added without a media track";
+    return;
+  }
+  auto* track = track_ref.get();
+  LogRemoteMediaState("on-add-track");
 
   if (track->kind() == webrtc::MediaStreamTrackInterface::kVideoKind) {
-    auto* video_track = static_cast<webrtc::VideoTrackInterface*>(track);
-    if (observer_) {
-      observer_->OnRemoteVideoTrackAdded(video_track);
-    }
+    PublishRemoteVideoTrack(static_cast<webrtc::VideoTrackInterface*>(track),
+                            "on-add-track");
   } else if (track->kind() == webrtc::MediaStreamTrackInterface::kAudioKind) {
     remote_audio_track_attached_.store(true);
     RTC_LOG(LS_INFO) << "Remote audio track added";
@@ -896,9 +1117,16 @@ void WebRTCEngine::OnPeerConnectionAddTrack(webrtc::RtpReceiverInterface* receiv
 
 void WebRTCEngine::OnPeerConnectionRemoveTrack(webrtc::RtpReceiverInterface* receiver) {
   RTC_LOG(LS_INFO) << "Track removed: " << receiver->id();
-  auto* track = receiver->track().get();
-  
+  auto track_ref = receiver->track();
+  if (!track_ref) {
+    RTC_LOG(LS_WARNING) << "Track removed without a media track";
+    return;
+  }
+  auto* track = track_ref.get();
+  LogRemoteMediaState("on-remove-track");
+
   if (track->kind() == webrtc::MediaStreamTrackInterface::kVideoKind) {
+    remote_video_track_ = nullptr;
     if (observer_) {
       observer_->OnRemoteVideoTrackRemoved();
     }
@@ -911,7 +1139,13 @@ void WebRTCEngine::OnPeerConnectionRemoveTrack(webrtc::RtpReceiverInterface* rec
 void WebRTCEngine::OnPeerConnectionIceConnectionChange(
     webrtc::PeerConnectionInterface::IceConnectionState new_state) {
   RTC_LOG(LS_INFO) << "ICE connection state changed: " << new_state;
-  
+
+  if (new_state == webrtc::PeerConnectionInterface::kIceConnectionConnected ||
+      new_state == webrtc::PeerConnectionInterface::kIceConnectionCompleted) {
+    PublishRemoteTracks("ice-connected");
+    LogRemoteMediaState("ice-connected");
+  }
+
   if (observer_) {
     observer_->OnIceConnectionStateChanged(new_state);
   }
@@ -945,7 +1179,8 @@ void WebRTCEngine::OnSessionDescriptionSuccess(webrtc::SessionDescriptionInterfa
       }
     } else {
       RTC_LOG(LS_INFO) << "SetLocalDescription succeeded, is_offer: " << is_offer;
-      
+      ProcessPendingIceCandidates();
+
       if (observer_) {
         if (is_offer) {
           RTC_LOG(LS_INFO) << "Calling observer_->OnOfferCreated()";

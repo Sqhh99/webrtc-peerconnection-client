@@ -79,6 +79,7 @@ int SdlApp::Run() {
 }
 
 void SdlApp::OnStartLocalRenderer(webrtc::VideoTrackInterface* track) {
+  local_renderer_.Clear();
   local_renderer_.SetVideoTrack(track);
 }
 
@@ -87,6 +88,7 @@ void SdlApp::OnStopLocalRenderer() {
 }
 
 void SdlApp::OnStartRemoteRenderer(webrtc::VideoTrackInterface* track) {
+  remote_renderer_.Clear();
   remote_renderer_.SetVideoTrack(track);
 }
 
@@ -238,6 +240,8 @@ void SdlApp::ResizeSwapChain(int width, int height) {
 void SdlApp::Shutdown() {
   local_renderer_.Stop();
   remote_renderer_.Stop();
+  ResetVideoTexture(&local_texture_);
+  ResetVideoTexture(&remote_texture_);
 
   if (ImGui::GetCurrentContext()) {
     ImGui_ImplDX11_Shutdown();
@@ -314,6 +318,24 @@ void SdlApp::RenderFrame() {
 }
 
 void SdlApp::RenderTopBar(UiSnapshot* snapshot) {
+  const char* logs_label =
+      snapshot->logs_drawer_open ? "[<] Hide Logs" : "[>] Show Logs";
+  const char* connection_label =
+      snapshot->connected ? "Disconnect" : "Reconnect";
+  const ImVec2 logs_button_size = ImGui::CalcTextSize(logs_label);
+  const ImVec2 connection_button_size =
+      ImGui::CalcTextSize(connection_label);
+  const float button_frame_padding =
+      ImGui::GetStyle().FramePadding.x * 2.0f;
+  const float button_spacing = ImGui::GetStyle().ItemSpacing.x;
+  const float logs_button_width = logs_button_size.x + button_frame_padding;
+  const float connection_button_width =
+      std::max(100.0f, connection_button_size.x + button_frame_padding);
+  const float right_actions_width =
+      logs_button_width + button_spacing + connection_button_width;
+  const float right_actions_x =
+      ImGui::GetWindowContentRegionMax().x - right_actions_width;
+
   ImGui::TextUnformatted("Native WebRTC Client");
   ImGui::SameLine();
   ImGui::TextDisabled("| %s", config_.signal_url.c_str());
@@ -324,9 +346,9 @@ void SdlApp::RenderTopBar(UiSnapshot* snapshot) {
                                          : ImVec4(0.92f, 0.33f, 0.24f, 1.0f),
                      snapshot->connected ? "connected" : "disconnected");
 
-  ImGui::SameLine(ImGui::GetWindowWidth() - 330.0f);
-  if (ImGui::SmallButton(snapshot->logs_drawer_open ? "[<] Hide Logs"
-                                                    : "[>] Show Logs")) {
+  ImGui::SameLine(std::max(ImGui::GetCursorPosX() + button_spacing,
+                           right_actions_x));
+  if (ImGui::SmallButton(logs_label)) {
     snapshot->logs_drawer_open = !snapshot->logs_drawer_open;
     std::lock_guard<std::mutex> lock(state_mutex_);
     state_.logs_drawer_open = snapshot->logs_drawer_open;
@@ -334,11 +356,11 @@ void SdlApp::RenderTopBar(UiSnapshot* snapshot) {
 
   ImGui::SameLine();
   if (snapshot->connected) {
-    if (ImGui::Button("Disconnect", ImVec2(100.0f, 0.0f))) {
+    if (ImGui::Button("Disconnect", ImVec2(connection_button_width, 0.0f))) {
       controller_->DisconnectFromSignalServer();
     }
   } else {
-    if (ImGui::Button("Reconnect", ImVec2(100.0f, 0.0f))) {
+    if (ImGui::Button("Reconnect", ImVec2(connection_button_width, 0.0f))) {
       controller_->ConnectToSignalServer(config_.signal_url, config_.username);
     }
   }
@@ -692,16 +714,31 @@ void SdlApp::RenderDialogs(UiSnapshot* snapshot) {
   }
 }
 
+void SdlApp::ResetVideoTexture(VideoTexture* texture) {
+  if (!texture) {
+    return;
+  }
+
+  texture->shader_resource_view.Reset();
+  texture->texture.Reset();
+  texture->width = 0;
+  texture->height = 0;
+}
+
 void SdlApp::UpdateVideoTexture(VideoRenderer* renderer, VideoTexture* texture) {
   const auto frame = renderer->ConsumeLatestFrame();
   if (!frame || !d3d_device_ || !d3d_device_context_) {
     return;
   }
 
+  if (frame->width <= 0 || frame->height <= 0 || frame->pixels.empty()) {
+    ResetVideoTexture(texture);
+    return;
+  }
+
   if (!texture->texture || texture->width != frame->width ||
       texture->height != frame->height) {
-    texture->texture.Reset();
-    texture->shader_resource_view.Reset();
+    ResetVideoTexture(texture);
 
     D3D11_TEXTURE2D_DESC description = {};
     description.Width = static_cast<UINT>(frame->width);

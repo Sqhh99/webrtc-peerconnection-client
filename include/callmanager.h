@@ -69,23 +69,31 @@ class CallManager {
   
   // 拒绝呼叫（被叫方）
   void RejectCall(const std::string& reason = "");
-  
+
   // 结束通话
   void EndCall();
-  
+
   // 获取当前状态
   CallState GetCallState() const;
   std::string GetCurrentPeer() const;
+  std::string GetCurrentCallId() const;
   bool IsInCall() const;
-  
+
   // 通知对等连接已建立（由Conductor调用）
   void NotifyPeerConnectionEstablished();
-  
+
   // 处理来自信令服务器的消息（由Conductor调用）
-  void HandleCallRequest(const std::string& from);
-  void HandleCallResponse(const std::string& from, bool accepted, const std::string& reason);
-  void HandleCallCancel(const std::string& from, const std::string& reason);
-  void HandleCallEnd(const std::string& from, const std::string& reason);
+  void HandleCallRequest(const std::string& from, const std::string& call_id);
+  void HandleCallResponse(const std::string& from,
+                          const std::string& call_id,
+                          bool accepted,
+                          const std::string& reason);
+  void HandleCallCancel(const std::string& from,
+                        const std::string& call_id,
+                        const std::string& reason);
+  void HandleCallEnd(const std::string& from,
+                     const std::string& call_id,
+                     const std::string& reason);
 
  private:
   void OnCallRequestTimeout();
@@ -101,6 +109,7 @@ class CallManager {
 
   CallState call_state_;
   std::string current_peer_;
+  std::string current_call_id_;
   bool is_caller_;  // 是否是主叫方
   std::jthread call_request_timer_thread_;
   std::atomic<uint64_t> timer_generation_{0};
