@@ -39,6 +39,21 @@ bool CallCoordinator::Initialize() {
 }
 
 void CallCoordinator::Shutdown() {
+  if (shutdown_started_.exchange(true)) {
+    return;
+  }
+
+  ui_observer_ = nullptr;
+  if (call_manager_) {
+    call_manager_->RegisterObserver(nullptr);
+  }
+  if (signal_client_) {
+    signal_client_->RegisterObserver(nullptr);
+  }
+  if (webrtc_engine_) {
+    webrtc_engine_->SetObserver(nullptr);
+  }
+
   if (signal_client_) {
     signal_client_->Disconnect();
   }
@@ -305,9 +320,25 @@ void CallCoordinator::OnClientListUpdate(const std::vector<ClientInfo>& clients)
 }
 
 void CallCoordinator::OnUserOffline(const std::string& client_id) {
-  if (client_id == current_peer_id_ && call_manager_) {
-    call_manager_->EndCall();
+  if (client_id != current_peer_id_ || !call_manager_) {
+    return;
   }
+
+  const CallState call_state = call_manager_->GetCallState();
+  RTC_LOG(LS_WARNING) << "Received user-offline for active peer " << client_id
+                      << ", current call state="
+                      << static_cast<int>(call_state);
+
+  if (call_state == CallState::Connected) {
+    if (ui_observer_) {
+      ui_observer_->OnLogMessage(
+          "Peer went offline on signaling server, but media session is kept alive.",
+          "warning");
+    }
+    return;
+  }
+
+  call_manager_->EndCall();
 }
 
 void CallCoordinator::OnCallRequest(const std::string& from,
@@ -337,6 +368,8 @@ void CallCoordinator::OnCallCancel(const std::string& from,
 void CallCoordinator::OnCallEnd(const std::string& from,
                                 const std::string& call_id,
                                 const std::string& reason) {
+  RTC_LOG(LS_INFO) << "Received call-end from " << from
+                   << ", call_id=" << call_id << ", reason=" << reason;
   if (call_manager_) {
     call_manager_->HandleCallEnd(from, call_id, reason);
   }

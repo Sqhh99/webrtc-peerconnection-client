@@ -13,16 +13,20 @@ import (
 
 // WebRTCSignalingServer WebRTC信令服务器
 type WebRTCSignalingServer struct {
-	clients map[string]*WebRTCClient // map[uid]*WebRTCClient
-	mutex   sync.RWMutex
+	clients            map[string]*WebRTCClient // map[uid]*WebRTCClient
+	visibleClients     map[string]struct{}
+	clientGenerations  map[string]uint64
+	pendingOfflineJobs map[string]*time.Timer
+	mutex              sync.RWMutex
 }
 
 // WebRTCClient WebRTC客户端连接
 type WebRTCClient struct {
-	uid    string
-	conn   *websocket.Conn
-	server *WebRTCSignalingServer
-	send   chan []byte
+	uid        string
+	generation uint64
+	conn       *websocket.Conn
+	server     *WebRTCSignalingServer
+	send       chan []byte
 }
 
 // WebRTCMessage WebRTC信令消息结构
@@ -39,6 +43,8 @@ type IceServer struct {
 	Username   string   `json:"username,omitempty"`
 	Credential string   `json:"credential,omitempty"`
 }
+
+const kOfflineGracePeriod = 5 * time.Second
 
 var (
 	addr     = flag.String("addr", ":8081", "http service address")
@@ -101,7 +107,10 @@ func handleWebRTCConnection(w http.ResponseWriter, r *http.Request) {
 // NewWebRTCSignalingServer 创建新的WebRTC信令服务器
 func NewWebRTCSignalingServer() *WebRTCSignalingServer {
 	return &WebRTCSignalingServer{
-		clients: make(map[string]*WebRTCClient),
+		clients:            make(map[string]*WebRTCClient),
+		visibleClients:     make(map[string]struct{}),
+		clientGenerations:  make(map[string]uint64),
+		pendingOfflineJobs: make(map[string]*time.Timer),
 	}
 }
 
@@ -116,6 +125,17 @@ func (s *WebRTCSignalingServer) HandleConnection(conn *websocket.Conn, uid strin
 
 	// 处理重复登录
 	s.mutex.Lock()
+	if pendingOfflineJob, ok := s.pendingOfflineJobs[uid]; ok {
+		if pendingOfflineJob.Stop() {
+			log.Printf("Cancelled pending offline notification for reconnect: %s", uid)
+		}
+		delete(s.pendingOfflineJobs, uid)
+	}
+
+	generation := s.clientGenerations[uid] + 1
+	s.clientGenerations[uid] = generation
+	client.generation = generation
+
 	if existingClient, ok := s.clients[uid]; ok {
 		// 关闭旧连接
 		log.Printf("Duplicate login detected, closing previous connection: %s", uid)
@@ -136,9 +156,11 @@ func (s *WebRTCSignalingServer) HandleConnection(conn *websocket.Conn, uid strin
 		s.mutex.Lock()
 	}
 	s.clients[uid] = client
+	s.visibleClients[uid] = struct{}{}
 	s.mutex.Unlock()
 
-	log.Printf("WebRTC client connected: %s (online: %d)", uid, s.getClientCount())
+	log.Printf("WebRTC client connected: %s (generation=%d, active=%d, visible=%d)",
+		uid, generation, s.getClientCount(), s.getVisibleClientCount())
 
 	// 启动读写协程
 	go client.writePump()
@@ -156,6 +178,13 @@ func (s *WebRTCSignalingServer) getClientCount() int {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 	return len(s.clients)
+}
+
+// getVisibleClientCount 获取当前对外可见的在线客户端数量
+func (s *WebRTCSignalingServer) getVisibleClientCount() int {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+	return len(s.visibleClients)
 }
 
 // sendRegisteredMessage 发送注册确认消息
@@ -231,13 +260,15 @@ func (s *WebRTCSignalingServer) removeClient(client *WebRTCClient) {
 	// 只有当 map 中的客户端就是当前这个客户端时才删除
 	if existingClient, ok := s.clients[client.uid]; ok && existingClient == client {
 		delete(s.clients, client.uid)
-		log.Printf("WebRTC client disconnected: %s (remaining online: %d)", client.uid, len(s.clients))
+		log.Printf("WebRTC client disconnected: %s (generation=%d, active=%d). Waiting %s before offline broadcast.",
+			client.uid, client.generation, len(s.clients), kOfflineGracePeriod)
 
-		// 通知其他客户端该用户已下线
-		go s.notifyUserOffline(client.uid)
-
-		// 广播客户端列表
-		go s.broadcastClientList()
+		if pendingOfflineJob, ok := s.pendingOfflineJobs[client.uid]; ok {
+			pendingOfflineJob.Stop()
+		}
+		s.pendingOfflineJobs[client.uid] = time.AfterFunc(kOfflineGracePeriod, func() {
+			s.confirmOffline(client.uid, client.generation)
+		})
 	} else {
 		log.Printf("WebRTC client disconnected, but a newer connection is active: %s", client.uid)
 	}
@@ -250,6 +281,37 @@ func (s *WebRTCSignalingServer) removeClient(client *WebRTCClient) {
 		}
 	}()
 	close(client.send)
+}
+
+// confirmOffline 在宽限期结束后确认用户仍然离线，再广播离线状态。
+func (s *WebRTCSignalingServer) confirmOffline(uid string, generation uint64) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	currentGeneration := s.clientGenerations[uid]
+	if currentGeneration != generation {
+		log.Printf("Skipping stale offline notification for %s: generation=%d current=%d",
+			uid, generation, currentGeneration)
+		return
+	}
+
+	if _, connected := s.clients[uid]; connected {
+		log.Printf("Skipping offline notification for %s: active connection restored", uid)
+		delete(s.pendingOfflineJobs, uid)
+		return
+	}
+
+	if _, visible := s.visibleClients[uid]; !visible {
+		delete(s.pendingOfflineJobs, uid)
+		return
+	}
+
+	delete(s.visibleClients, uid)
+	delete(s.pendingOfflineJobs, uid)
+	log.Printf("Confirmed offline after grace period: %s", uid)
+
+	go s.notifyUserOffline(uid)
+	go s.broadcastClientList()
 }
 
 // notifyUserOffline 通知其他客户端用户已下线
@@ -314,7 +376,7 @@ func (s *WebRTCSignalingServer) relayMessage(senderUID string, msg *WebRTCMessag
 func (s *WebRTCSignalingServer) broadcastClientList() {
 	s.mutex.RLock()
 	var clients []map[string]string
-	for uid := range s.clients {
+	for uid := range s.visibleClients {
 		clients = append(clients, map[string]string{"id": uid})
 	}
 	s.mutex.RUnlock()
@@ -353,7 +415,7 @@ func (s *WebRTCSignalingServer) broadcastClientList() {
 func (s *WebRTCSignalingServer) sendClientList(client *WebRTCClient) {
 	s.mutex.RLock()
 	var clients []map[string]string
-	for uid := range s.clients {
+	for uid := range s.visibleClients {
 		clients = append(clients, map[string]string{"id": uid})
 	}
 	s.mutex.RUnlock()

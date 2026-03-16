@@ -1,6 +1,7 @@
 #ifndef CALL_COORDINATOR_H_GUARD
 #define CALL_COORDINATOR_H_GUARD
 
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -118,6 +119,7 @@ class CallCoordinator : public WebRTCEngineObserver,
   mutable std::mutex stats_mutex_;
   RtcStatsSnapshot last_stats_;
   bool has_stats_ = false;
+  std::atomic<bool> shutdown_started_{false};
   struct RateSample {
     uint64_t inbound_bytes = 0;
     uint64_t outbound_bytes = 0;
