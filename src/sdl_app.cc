@@ -277,8 +277,10 @@ void SdlApp::RenderFrame() {
   ImGui::SetNextWindowSize(viewport->WorkSize);
 
   ImGui::Begin("PeerConnection", nullptr, kMainWindowFlags);
-  RenderTopBar(snapshot);
+  RenderTopBar(&snapshot);
   ImGui::Separator();
+  const ImVec2 content_pos = ImGui::GetCursorScreenPos();
+  const ImVec2 content_size = ImGui::GetContentRegionAvail();
 
   if (ImGui::BeginTable("main_layout", 2,
                         ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingStretchProp)) {
@@ -290,12 +292,11 @@ void SdlApp::RenderFrame() {
 
     ImGui::TableNextColumn();
     RenderVideoArea(snapshot);
-    ImGui::Spacing();
-    RenderLogPanel(snapshot);
 
     ImGui::EndTable();
   }
 
+  RenderLogDrawer(&snapshot, content_pos, content_size);
   RenderDialogs(&snapshot);
   ImGui::End();
 
@@ -309,19 +310,27 @@ void SdlApp::RenderFrame() {
   swap_chain_->Present(1, 0);
 }
 
-void SdlApp::RenderTopBar(const UiSnapshot& snapshot) {
+void SdlApp::RenderTopBar(UiSnapshot* snapshot) {
   ImGui::TextUnformatted("Native WebRTC Client");
   ImGui::SameLine();
   ImGui::TextDisabled("| %s", config_.signal_url.c_str());
   ImGui::SameLine();
   ImGui::TextDisabled("| user: %s", config_.username.c_str());
   ImGui::SameLine();
-  ImGui::TextColored(snapshot.connected ? ImVec4(0.25f, 0.78f, 0.45f, 1.0f)
-                                        : ImVec4(0.92f, 0.33f, 0.24f, 1.0f),
-                     snapshot.connected ? "connected" : "disconnected");
+  ImGui::TextColored(snapshot->connected ? ImVec4(0.25f, 0.78f, 0.45f, 1.0f)
+                                         : ImVec4(0.92f, 0.33f, 0.24f, 1.0f),
+                     snapshot->connected ? "connected" : "disconnected");
 
-  ImGui::SameLine(ImGui::GetWindowWidth() - 220.0f);
-  if (snapshot.connected) {
+  ImGui::SameLine(ImGui::GetWindowWidth() - 330.0f);
+  if (ImGui::SmallButton(snapshot->logs_drawer_open ? "[<] Hide Logs"
+                                                    : "[>] Show Logs")) {
+    snapshot->logs_drawer_open = !snapshot->logs_drawer_open;
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    state_.logs_drawer_open = snapshot->logs_drawer_open;
+  }
+
+  ImGui::SameLine();
+  if (snapshot->connected) {
     if (ImGui::Button("Disconnect", ImVec2(100.0f, 0.0f))) {
       controller_->DisconnectFromSignalServer();
     }
@@ -382,38 +391,78 @@ void SdlApp::RenderSidebar(UiSnapshot* snapshot) {
 }
 
 void SdlApp::RenderVideoArea(const UiSnapshot& snapshot) {
-  ImGui::BeginChild("video_panel", ImVec2(0.0f, 460.0f), true);
+  ImGui::BeginChild("video_panel", ImVec2(0.0f, 0.0f), true);
   ImGui::Text("Call with: %s",
               snapshot.current_peer_id.empty() ? "(none)"
                                                : snapshot.current_peer_id.c_str());
   ImGui::TextDisabled("%s", GetCallStateLabel(snapshot.call_state).c_str());
   ImGui::Spacing();
+  ImGui::Separator();
 
-  const ImVec2 available = ImGui::GetContentRegionAvail();
+  ImGui::BeginChild("video_canvas", ImVec2(0.0f, 0.0f), false,
+                    ImGuiWindowFlags_NoScrollbar |
+                        ImGuiWindowFlags_NoScrollWithMouse);
+  const ImVec2 canvas_pos = ImGui::GetCursorScreenPos();
+  const ImVec2 canvas_size = ImGui::GetContentRegionAvail();
+  ImDrawList* draw_list = ImGui::GetWindowDrawList();
+  draw_list->AddRectFilled(canvas_pos,
+                           ImVec2(canvas_pos.x + canvas_size.x,
+                                  canvas_pos.y + canvas_size.y),
+                           IM_COL32(22, 27, 34, 255), 8.0f);
+
   if (remote_texture_.shader_resource_view) {
     const ImVec2 remote_size =
-        CalculateFitSize(available, remote_texture_.width, remote_texture_.height);
-    const float offset_x = std::max(0.0f, (available.x - remote_size.x) * 0.5f);
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + offset_x);
+        CalculateFitSize(canvas_size, remote_texture_.width, remote_texture_.height);
+    const ImVec2 remote_pos(
+        canvas_pos.x + std::max(0.0f, (canvas_size.x - remote_size.x) * 0.5f),
+        canvas_pos.y + std::max(0.0f, (canvas_size.y - remote_size.y) * 0.5f));
+    ImGui::SetCursorScreenPos(remote_pos);
     ImGui::Image(reinterpret_cast<ImTextureID>(
                      remote_texture_.shader_resource_view.Get()),
                  remote_size);
   } else {
-    ImGui::Dummy(ImVec2(0.0f, available.y * 0.35f));
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 24.0f);
+    const ImVec2 text_size = ImGui::CalcTextSize("Waiting for remote video...");
+    ImGui::SetCursorScreenPos(ImVec2(
+        canvas_pos.x + std::max(24.0f, (canvas_size.x - text_size.x) * 0.5f),
+        canvas_pos.y + std::max(24.0f, (canvas_size.y - text_size.y) * 0.5f)));
     ImGui::TextDisabled("Waiting for remote video...");
   }
 
   if (local_texture_.shader_resource_view) {
-    ImGui::SeparatorText("Local Preview");
-    const ImVec2 local_max_size =
-        ImVec2(std::min(available.x, 280.0f), std::min(available.y, 180.0f));
+    const float overlay_width =
+        std::clamp(canvas_size.x * 0.24f, 160.0f, 280.0f);
+    const float overlay_height =
+        std::clamp(canvas_size.y * 0.24f, 90.0f, 180.0f);
+    const ImVec2 local_max_size(overlay_width, overlay_height);
     const ImVec2 local_size =
         CalculateFitSize(local_max_size, local_texture_.width, local_texture_.height);
+    const float margin = 16.0f;
+    const float frame_padding = 8.0f;
+    const ImVec2 overlay_pos(
+        canvas_pos.x + canvas_size.x - local_size.x - margin - frame_padding * 2.0f,
+        canvas_pos.y + canvas_size.y - local_size.y - margin - frame_padding * 2.0f);
+    const ImVec2 overlay_end(
+        overlay_pos.x + local_size.x + frame_padding * 2.0f,
+        overlay_pos.y + local_size.y + frame_padding * 2.0f + 22.0f);
+
+    draw_list->AddRectFilled(
+        overlay_pos, overlay_end, IM_COL32(8, 10, 14, 230), 10.0f);
+    draw_list->AddRect(
+        overlay_pos, overlay_end, IM_COL32(255, 255, 255, 70), 10.0f, 0, 2.0f);
+    draw_list->AddText(ImVec2(overlay_pos.x + frame_padding,
+                              overlay_pos.y + frame_padding - 1.0f),
+                       IM_COL32(235, 238, 242, 255), "You");
+
+    ImGui::SetCursorScreenPos(ImVec2(overlay_pos.x + frame_padding,
+                                     overlay_pos.y + 22.0f));
     ImGui::Image(reinterpret_cast<ImTextureID>(
                      local_texture_.shader_resource_view.Get()),
                  local_size);
   }
+
+  ImGui::SetCursorScreenPos(canvas_pos);
+  ImGui::Dummy(canvas_size);
+  ImGui::EndChild();
 
   ImGui::EndChild();
 }
@@ -448,12 +497,44 @@ void SdlApp::RenderStatsPanel() {
                  " fps");
 }
 
-void SdlApp::RenderLogPanel(const UiSnapshot& snapshot) {
-  ImGui::BeginChild("log_panel", ImVec2(0.0f, 0.0f), true);
+void SdlApp::RenderLogDrawer(UiSnapshot* snapshot,
+                             const ImVec2& content_pos,
+                             const ImVec2& content_size) {
+  if (!snapshot->logs_drawer_open) {
+    return;
+  }
+
+  const float drawer_width =
+      std::clamp(content_size.x * 0.28f, 320.0f, 420.0f);
+  const ImVec2 drawer_pos(content_pos.x + content_size.x - drawer_width,
+                          content_pos.y);
+  const ImVec2 drawer_size(drawer_width, content_size.y);
+
+  ImGui::SetNextWindowPos(drawer_pos, ImGuiCond_Always);
+  ImGui::SetNextWindowSize(drawer_size, ImGuiCond_Always);
+  ImGui::SetNextWindowBgAlpha(0.97f);
+
+  const ImGuiWindowFlags drawer_flags =
+      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoMove |
+      ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings;
+
+  if (!ImGui::Begin("Logs Drawer", nullptr, drawer_flags)) {
+    ImGui::End();
+    return;
+  }
+
   ImGui::TextUnformatted("Logs");
+  ImGui::SameLine(ImGui::GetWindowWidth() - 78.0f);
+  if (ImGui::SmallButton("Close")) {
+    snapshot->logs_drawer_open = false;
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    state_.logs_drawer_open = false;
+  }
+
   ImGui::Separator();
 
-  for (const LogEntry& entry : snapshot.logs) {
+  ImGui::BeginChild("log_panel", ImVec2(0.0f, 0.0f), true);
+  for (const LogEntry& entry : snapshot->logs) {
     ImVec4 color = ImVec4(0.70f, 0.72f, 0.74f, 1.0f);
     if (entry.level == "error") {
       color = ImVec4(0.92f, 0.33f, 0.24f, 1.0f);
@@ -471,6 +552,7 @@ void SdlApp::RenderLogPanel(const UiSnapshot& snapshot) {
     ImGui::SetScrollHereY(1.0f);
   }
   ImGui::EndChild();
+  ImGui::End();
 }
 
 void SdlApp::RenderDialogs(UiSnapshot* snapshot) {

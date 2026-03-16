@@ -56,6 +56,7 @@ class SdlApp : public ICallUIObserver {
 
   struct UiSnapshot {
     bool connected = false;
+    bool logs_drawer_open = false;
     std::string client_id;
     std::vector<ClientInfo> clients;
     std::string current_peer_id;
@@ -83,11 +84,13 @@ class SdlApp : public ICallUIObserver {
   void Shutdown();
   void HandleSdlEvent(const SDL_Event& event, bool* should_quit);
   void RenderFrame();
-  void RenderTopBar(const UiSnapshot& snapshot);
+  void RenderTopBar(UiSnapshot* snapshot);
   void RenderSidebar(UiSnapshot* snapshot);
   void RenderVideoArea(const UiSnapshot& snapshot);
   void RenderStatsPanel();
-  void RenderLogPanel(const UiSnapshot& snapshot);
+  void RenderLogDrawer(UiSnapshot* snapshot,
+                       const ImVec2& content_pos,
+                       const ImVec2& content_size);
   void RenderDialogs(UiSnapshot* snapshot);
   void UpdateVideoTexture(VideoRenderer* renderer, VideoTexture* texture);
   std::string GetNowString() const;
