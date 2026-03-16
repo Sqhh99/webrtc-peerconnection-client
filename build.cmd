@@ -1,7 +1,11 @@
 @echo off
 setlocal enableextensions enabledelayedexpansion
 
+for %%I in ("%~dp0.") do set "ROOT_DIR=%%~fI"
+set "BUILD_ROOT=%ROOT_DIR%\build"
+
 set "CONFIG_NAME=%~1"
+if /I "%CONFIG_NAME%"=="clean" goto clean_build
 if "%CONFIG_NAME%"=="" set "CONFIG_NAME=release"
 
 if /I "%CONFIG_NAME%"=="release" (
@@ -9,7 +13,7 @@ if /I "%CONFIG_NAME%"=="release" (
 ) else if /I "%CONFIG_NAME%"=="debug" (
     set "BUILD_TYPE=Debug"
 ) else (
-    echo Usage: %~nx0 [release^|debug] [additional CMake configure args...]
+    echo Usage: %~nx0 [clean^|release^|debug] [additional CMake configure args...]
     exit /b 1
 )
 
@@ -23,8 +27,7 @@ shift
 goto collect_extra_args
 :args_done
 
-for %%I in ("%~dp0.") do set "ROOT_DIR=%%~fI"
-set "BUILD_DIR=%ROOT_DIR%\build\%CONFIG_NAME%"
+set "BUILD_DIR=%BUILD_ROOT%\%CONFIG_NAME%"
 
 if not defined WEBRTC_VERSION set "WEBRTC_VERSION=m146.7680.1.0"
 if not defined WEBRTC_PLATFORM set "WEBRTC_PLATFORM=windows_x86_64"
@@ -73,8 +76,46 @@ call cmake -S "%ROOT_DIR%" -B "%BUILD_DIR%" -G Ninja ^
     !EXTRA_CMAKE_ARGS!
 if errorlevel 1 exit /b 1
 
+call :copy_compile_commands
+if errorlevel 1 exit /b 1
+
 call cmake --build "%BUILD_DIR%" --config %BUILD_TYPE%
+if errorlevel 1 exit /b 1
+
+call :copy_compile_commands
 exit /b %errorlevel%
+
+:clean_build
+if exist "%BUILD_ROOT%" (
+    echo [build.cmd] Removing build directory %BUILD_ROOT%
+    rmdir /s /q "%BUILD_ROOT%"
+    if errorlevel 1 (
+        echo [build.cmd] Failed to remove build directory.
+        exit /b 1
+    )
+) else (
+    echo [build.cmd] Build directory does not exist: %BUILD_ROOT%
+)
+exit /b 0
+
+:copy_compile_commands
+set "COMPILE_COMMANDS_SRC=%BUILD_DIR%\compile_commands.json"
+set "COMPILE_COMMANDS_DST=%BUILD_ROOT%\compile_commands.json"
+
+if not exist "%BUILD_DIR%" mkdir "%BUILD_DIR%" >nul 2>nul
+if not exist "%BUILD_ROOT%" mkdir "%BUILD_ROOT%" >nul 2>nul
+
+if not exist "%COMPILE_COMMANDS_SRC%" (
+    echo [build.cmd] compile_commands.json not found at %COMPILE_COMMANDS_SRC%
+    exit /b 0
+)
+
+copy /y "%COMPILE_COMMANDS_SRC%" "%COMPILE_COMMANDS_DST%" >nul
+if errorlevel 1 (
+    echo [build.cmd] Failed to copy compile_commands.json to %COMPILE_COMMANDS_DST%
+    exit /b 1
+)
+exit /b 0
 
 :find_cmake
 for /f "usebackq delims=" %%I in (`where cmake.exe 2^>nul`) do (
