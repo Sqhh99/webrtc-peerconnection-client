@@ -22,8 +22,11 @@ find_package(SDL3 CONFIG REQUIRED)
 
 include(cmake/FetchWebRTC.cmake)
 ensure_webrtc_prebuilt()
+include(cmake/FetchFFmpeg.cmake)
+ensure_ffmpeg_prebuilt()
 
 add_executable(peerconnection_client
+    WIN32
     src/main.cc
     src/sdl_app.cc
     src/call_coordinator.cc
@@ -32,6 +35,8 @@ add_executable(peerconnection_client
     src/videorenderer.cc
     src/signalclient.cc
     src/callmanager.cc
+    src/ffmpeg_file_source.cc
+    src/switchable_audio_input_win.cc
     src/test_impl.cc
     test/platform_video_capturer.cc
     test/vcm_capturer.cc
@@ -44,9 +49,13 @@ add_executable(peerconnection_client
     include/callmanager.h
     include/defaults.h
     include/icall_observer.h
+    include/local_media_source.h
+    include/managed_video_track_source.h
+    include/ffmpeg_file_source.h
     include/sdl_app.h
     include/signal_types.h
     include/signalclient.h
+    include/switchable_audio_input_win.h
     include/videorenderer.h
     include/webrtcengine.h
 )
@@ -112,12 +121,23 @@ target_link_libraries(
     peerconnection_client
     PRIVATE
         webrtc_prebuilt
+        ffmpeg_prebuilt
         Boost::system
         imgui::imgui
         nlohmann_json::nlohmann_json
         SDL3::SDL3
         ${SYSTEM_LIBRARIES}
 )
+
+foreach(FFMPEG_RUNTIME_DLL IN LISTS FFMPEG_RUNTIME_DLLS)
+    add_custom_command(
+        TARGET peerconnection_client
+        POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${FFMPEG_RUNTIME_DLL}"
+            "$<TARGET_FILE_DIR:peerconnection_client>"
+    )
+endforeach()
 
 set_target_properties(peerconnection_client PROPERTIES
     LINK_FLAGS "/SUBSYSTEM:CONSOLE"

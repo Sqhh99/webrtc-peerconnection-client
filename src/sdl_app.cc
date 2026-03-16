@@ -1,9 +1,11 @@
 #include "sdl_app.h"
 
+#include <commdlg.h>
 #include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <ctime>
+#include <filesystem>
 #include <iomanip>
 #include <iterator>
 #include <sstream>
@@ -18,6 +20,7 @@ namespace {
 constexpr ImGuiWindowFlags kMainWindowFlags =
     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus;
+namespace fs = std::filesystem;
 
 }  // namespace
 
@@ -385,6 +388,9 @@ void SdlApp::RenderSidebar(UiSnapshot* snapshot) {
   ImGui::EndDisabled();
 
   ImGui::Spacing();
+  ImGui::SeparatorText("Media Source");
+  RenderMediaSourcePanel();
+  ImGui::Spacing();
   ImGui::SeparatorText("Stats");
   RenderStatsPanel();
   ImGui::EndChild();
@@ -465,6 +471,38 @@ void SdlApp::RenderVideoArea(const UiSnapshot& snapshot) {
   ImGui::EndChild();
 
   ImGui::EndChild();
+}
+
+void SdlApp::RenderMediaSourcePanel() {
+  const LocalVideoSourceState source_state =
+      controller_->GetLocalVideoSourceState();
+
+  ImGui::Text("Mode: %s",
+              LocalVideoSourceKindToString(source_state.kind));
+  if (source_state.kind == LocalVideoSourceKind::File &&
+      !source_state.file_path.empty()) {
+    ImGui::TextWrapped("File: %s",
+                       GetFileNameForDisplay(source_state.file_path).c_str());
+  } else {
+    ImGui::TextDisabled("File: -");
+  }
+
+  if (ImGui::Button("Use Camera", ImVec2(-1.0f, 0.0f))) {
+    LocalVideoSourceConfig config;
+    config.kind = LocalVideoSourceKind::Camera;
+    controller_->SetLocalVideoSource(config);
+  }
+  if (ImGui::Button("Open Media File...", ImVec2(-1.0f, 0.0f))) {
+    const std::optional<std::string> file_path = PromptForMediaFilePath();
+    if (file_path) {
+      LocalVideoSourceConfig config;
+      config.kind = LocalVideoSourceKind::File;
+      config.file_path = *file_path;
+      controller_->SetLocalVideoSource(config);
+    }
+  }
+
+  ImGui::TextDisabled("File source uses FFmpeg for common video files.");
 }
 
 void SdlApp::RenderStatsPanel() {
@@ -742,6 +780,34 @@ std::string SdlApp::GetCallStateLabel(CallState state) const {
     default:
       return "Unknown";
   }
+}
+
+std::string SdlApp::GetFileNameForDisplay(const std::string& path) const {
+  const fs::path file_path(path);
+  if (!file_path.filename().empty()) {
+    return file_path.filename().string();
+  }
+  return path;
+}
+
+std::optional<std::string> SdlApp::PromptForMediaFilePath() const {
+  char file_buffer[MAX_PATH] = {};
+  OPENFILENAMEA dialog = {};
+  dialog.lStructSize = sizeof(dialog);
+  dialog.hwndOwner = reinterpret_cast<HWND>(
+      SDL_GetPointerProperty(SDL_GetWindowProperties(window_),
+                             SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr));
+  dialog.lpstrFilter =
+      "Media Files (*.mp4;*.mov;*.mkv;*.avi)\0*.mp4;*.mov;*.mkv;*.avi\0All Files (*.*)\0*.*\0";
+  dialog.lpstrFile = file_buffer;
+  dialog.nMaxFile = MAX_PATH;
+  dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+  dialog.lpstrTitle = "Select Media File";
+
+  if (!GetOpenFileNameA(&dialog)) {
+    return std::nullopt;
+  }
+  return std::string(dialog.lpstrFile);
 }
 
 ImVec2 SdlApp::CalculateFitSize(ImVec2 max_size, int width, int height) const {

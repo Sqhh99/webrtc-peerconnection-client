@@ -45,6 +45,8 @@ class CallCoordinator : public WebRTCEngineObserver,
   CallState GetCallState() const override;
   std::string GetCurrentPeerId() const override;
   std::string GetClientId() const override;
+  bool SetLocalVideoSource(const LocalVideoSourceConfig& config) override;
+  LocalVideoSourceState GetLocalVideoSourceState() const override;
   RtcStatsSnapshot GetLatestRtcStats() override;
 
  private:

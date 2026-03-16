@@ -1,5 +1,6 @@
 #include "call_coordinator.h"
 
+#include <filesystem>
 #include <utility>
 
 #include "api/stats/rtcstats_objects.h"
@@ -102,6 +103,42 @@ std::string CallCoordinator::GetCurrentPeerId() const {
 
 std::string CallCoordinator::GetClientId() const {
   return signal_client_ ? signal_client_->GetClientId() : std::string();
+}
+
+bool CallCoordinator::SetLocalVideoSource(const LocalVideoSourceConfig& config) {
+  if (!webrtc_engine_) {
+    return false;
+  }
+
+  std::string error_message;
+  if (!webrtc_engine_->SetLocalVideoSource(config, &error_message)) {
+    if (ui_observer_) {
+      ui_observer_->OnShowError(
+          "Media Source Error",
+          error_message.empty() ? "Failed to update local video source."
+                                : error_message);
+    }
+    return false;
+  }
+
+  if (ui_observer_) {
+    std::string message =
+        "Local video source switched to " +
+        std::string(LocalVideoSourceKindToString(config.kind));
+    if (config.kind == LocalVideoSourceKind::File && !config.file_path.empty()) {
+      message += ": " +
+                 std::filesystem::path(config.file_path).filename().string();
+    }
+    ui_observer_->OnLogMessage(message, "info");
+  }
+  return true;
+}
+
+LocalVideoSourceState CallCoordinator::GetLocalVideoSourceState() const {
+  if (!webrtc_engine_) {
+    return {};
+  }
+  return webrtc_engine_->GetLocalVideoSourceState();
 }
 
 RtcStatsSnapshot CallCoordinator::GetLatestRtcStats() {
@@ -383,7 +420,13 @@ void CallCoordinator::OnNeedCreatePeerConnection(const std::string& peer_id,
     return;
   }
 
-  webrtc_engine_->AddTracks();
+  if (!webrtc_engine_->AddTracks()) {
+    if (ui_observer_) {
+      ui_observer_->OnShowError("Error", "Failed to attach local media tracks");
+    }
+    webrtc_engine_->ClosePeerConnection();
+    return;
+  }
   if (is_caller) {
     webrtc_engine_->CreateOffer();
   }

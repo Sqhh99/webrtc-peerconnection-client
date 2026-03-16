@@ -4,8 +4,9 @@
 
 #include "webrtcengine.h"
 
-#include <utility>
+#include <filesystem>
 #include <optional>
+#include <utility>
 
 #include "api/audio_codecs/builtin_audio_decoder_factory.h"
 #include "api/audio_codecs/builtin_audio_encoder_factory.h"
@@ -27,8 +28,9 @@
 #include "api/video_codecs/video_encoder_factory_template_open_h264_adapter.h"
 #include "media/engine/adm_helpers.h"
 #include "modules/audio_device/include/audio_device_factory.h"
+#include "modules/audio_device/win/audio_device_module_win.h"
+#include "modules/audio_device/win/core_audio_output_win.h"
 #include "modules/video_capture/video_capture_factory.h"
-#include "pc/video_track_source.h"
 #include "rtc_base/checks.h"
 #include "rtc_base/logging.h"
 #include "rtc_base/ref_counted_object.h"
@@ -39,11 +41,13 @@
 #include "test/frame_generator_capturer.h"
 #include "test/platform_video_capturer.h"
 #include "test/test_video_capturer.h"
-
+#include "ffmpeg_file_source.h"
+#include "switchable_audio_input_win.h"
 
 namespace {
 
 using webrtc::test::TestVideoCapturer;
+namespace fs = std::filesystem;
 
 // 设置远程描述的观察者
 class SetRemoteDescriptionObserver
@@ -89,6 +93,17 @@ class SetLocalDescriptionObserver
   std::function<void(webrtc::RTCError)> callback_;
 };
 
+std::string GetSourceDisplayName(const LocalVideoSourceConfig& config) {
+  if (config.kind == LocalVideoSourceKind::File && !config.file_path.empty()) {
+    const fs::path path(config.file_path);
+    if (!path.filename().empty()) {
+      return path.filename().string();
+    }
+    return config.file_path;
+  }
+  return LocalVideoSourceKindToString(config.kind);
+}
+
 // 创建视频捕获器
 std::unique_ptr<TestVideoCapturer> CreateCapturer(
     webrtc::TaskQueueFactory& task_queue_factory) {
@@ -119,9 +134,9 @@ std::unique_ptr<TestVideoCapturer> CreateCapturer(
 }
 
 // CapturerTrackSource - 视频采集源包装器
-class CapturerTrackSource : public webrtc::VideoTrackSource {
+class CapturerTrackSource : public ManagedVideoTrackSource {
  public:
-  static webrtc::scoped_refptr<CapturerTrackSource> Create(
+  static webrtc::scoped_refptr<ManagedVideoTrackSource> Create(
       webrtc::TaskQueueFactory& task_queue_factory) {
     std::unique_ptr<TestVideoCapturer> capturer =
         CreateCapturer(task_queue_factory);
@@ -136,7 +151,7 @@ class CapturerTrackSource : public webrtc::VideoTrackSource {
     Stop();
   }
   
-  void Stop() {
+  void Stop() override {
     if (capturer_) {
       capturer_->Stop();
     }
@@ -144,7 +159,7 @@ class CapturerTrackSource : public webrtc::VideoTrackSource {
 
  protected:
   explicit CapturerTrackSource(std::unique_ptr<TestVideoCapturer> capturer)
-      : VideoTrackSource(/*remote=*/false), capturer_(std::move(capturer)) {}
+      : capturer_(std::move(capturer)) {}
 
  private:
   webrtc::VideoSourceInterface<webrtc::VideoFrame>* source() override {
@@ -238,6 +253,8 @@ class WebRTCEngine::StatsCollectorCallback : public webrtc::RTCStatsCollectorCal
 
 WebRTCEngine::WebRTCEngine(const webrtc::Environment& env)
     : env_(env), observer_(nullptr), is_creating_offer_(false) {
+  local_video_source_state_ =
+      BuildLocalVideoSourceState(local_video_source_config_, false);
 }
 
 WebRTCEngine::~WebRTCEngine() {
@@ -251,6 +268,62 @@ void WebRTCEngine::SetObserver(WebRTCEngineObserver* observer) {
 void WebRTCEngine::SetIceServers(const std::vector<IceServerConfig>& ice_servers) {
   ice_servers_ = ice_servers;
   RTC_LOG(LS_INFO) << "Updated ICE servers configuration, count: " << ice_servers_.size();
+}
+
+bool WebRTCEngine::ValidateLocalVideoSourceConfig(
+    const LocalVideoSourceConfig& config,
+    std::string* error_message) const {
+  if (!IsImplementedLocalVideoSourceKind(config.kind)) {
+    if (error_message) {
+      *error_message =
+          std::string(LocalVideoSourceKindToString(config.kind)) +
+          " source is not implemented yet.";
+    }
+    return false;
+  }
+
+  if (config.kind != LocalVideoSourceKind::File) {
+    return true;
+  }
+
+  if (config.file_path.empty()) {
+    if (error_message) {
+      *error_message = "A file path is required for file video source.";
+    }
+    return false;
+  }
+
+  return FfmpegFileSource::ProbeFile(config.file_path, error_message);
+}
+
+webrtc::scoped_refptr<ManagedVideoTrackSource>
+WebRTCEngine::CreateVideoSourceForConfig(const LocalVideoSourceConfig& config,
+                                         std::string* error_message) {
+  switch (config.kind) {
+    case LocalVideoSourceKind::Camera:
+      return CapturerTrackSource::Create(env_.task_queue_factory());
+    case LocalVideoSourceKind::File:
+      return FfmpegFileSource::Create(env_, config.file_path,
+                                      audio_input_switcher_, error_message);
+    default:
+      if (error_message) {
+        *error_message =
+            std::string(LocalVideoSourceKindToString(config.kind)) +
+            " source is not implemented yet.";
+      }
+      return nullptr;
+  }
+}
+
+LocalVideoSourceState WebRTCEngine::BuildLocalVideoSourceState(
+    const LocalVideoSourceConfig& config,
+    bool active) const {
+  LocalVideoSourceState state;
+  state.kind = config.kind;
+  state.file_path = config.file_path;
+  state.display_name = GetSourceDisplayName(config);
+  state.active = active;
+  return state;
 }
 
 bool WebRTCEngine::Initialize() {
@@ -273,10 +346,17 @@ bool WebRTCEngine::Initialize() {
     return false;
   }
 
+  auto audio_input =
+      std::make_unique<SwitchableAudioInput>(env_, /*automatic_restart=*/true);
+  audio_input_switcher_ = audio_input.get();
   audio_device_module_ =
-      webrtc::CreateWindowsCoreAudioAudioDeviceModule(env_);
+      webrtc::webrtc_win::CreateWindowsCoreAudioAudioDeviceModuleFromInputAndOutput(
+          env_, std::move(audio_input),
+          std::make_unique<webrtc::webrtc_win::CoreAudioOutput>(
+              env_, /*automatic_restart=*/true));
   if (!audio_device_module_) {
     RTC_LOG(LS_ERROR) << "Failed to create Windows Core Audio device module";
+    audio_input_switcher_ = nullptr;
     return false;
   }
 
@@ -400,14 +480,11 @@ bool WebRTCEngine::CreatePeerConnection() {
 
 void WebRTCEngine::ClosePeerConnection() {
   RTC_LOG(LS_INFO) << "Closing peer connection...";
-  
+
   // 第一步: 显式停止摄像头采集(最重要!)
   if (video_source_) {
-    CapturerTrackSource* capturer_source = static_cast<CapturerTrackSource*>(video_source_.get());
-    if (capturer_source) {
-      capturer_source->Stop();
-      RTC_LOG(LS_INFO) << "Video capturer stopped";
-    }
+    video_source_->Stop();
+    RTC_LOG(LS_INFO) << "Video source stopped";
   }
   
   // 第二步: 禁用本地媒体轨道
@@ -438,11 +515,22 @@ void WebRTCEngine::ClosePeerConnection() {
   // 第四步: 释放本地媒体轨道 (释放对source的引用)
   local_video_track_ = nullptr;
   local_audio_track_ = nullptr;
+  video_sender_ = nullptr;
+  audio_sender_ = nullptr;
   local_audio_track_attached_.store(false);
   remote_audio_track_attached_.store(false);
 
   // 第五步: 释放 video_source (现在引用计数应该为0,触发析构)
   video_source_ = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(video_source_mutex_);
+    local_video_source_state_ =
+        BuildLocalVideoSourceState(local_video_source_config_, false);
+  }
+  if (audio_input_switcher_) {
+    audio_input_switcher_->UseMicrophone();
+    audio_input_switcher_->ClearSyntheticAudio();
+  }
   RTC_LOG(LS_INFO) << "Video source released";
   
   // 第六步: 清理观察者和其他资源
@@ -463,24 +551,56 @@ bool WebRTCEngine::AddTracks() {
     return true;
   }
 
-  // 添加视频轨道
-  video_source_ = CapturerTrackSource::Create(env_.task_queue_factory());
-  if (video_source_) {
-    local_video_track_ = peer_connection_factory_->CreateVideoTrack(video_source_, "video_label");
-    auto result_or_error = peer_connection_->AddTrack(local_video_track_, {"stream_id"});
-    
-    if (!result_or_error.ok()) {
-      RTC_LOG(LS_ERROR) << "Failed to add video track: "
-                        << result_or_error.error().message();
-      if (observer_) {
-        observer_->OnError("Failed to add video track");
-      }
-      return false;
+  LocalVideoSourceConfig source_config;
+  {
+    std::lock_guard<std::mutex> lock(video_source_mutex_);
+    source_config = local_video_source_config_;
+  }
+
+  if (audio_input_switcher_) {
+    if (source_config.kind == LocalVideoSourceKind::File) {
+      audio_input_switcher_->UseSyntheticPcm(48000, 2);
+      audio_input_switcher_->ClearSyntheticAudio();
     } else {
-      if (observer_) {
-        observer_->OnLocalVideoTrackAdded(local_video_track_.get());
-      }
+      audio_input_switcher_->UseMicrophone();
+      audio_input_switcher_->ClearSyntheticAudio();
     }
+  }
+
+  std::string video_source_error;
+  video_source_ = CreateVideoSourceForConfig(source_config, &video_source_error);
+  if (!video_source_) {
+    RTC_LOG(LS_ERROR) << "Failed to create local video source: "
+                      << video_source_error;
+    if (observer_) {
+      observer_->OnError(video_source_error.empty()
+                             ? "Failed to create local video source"
+                             : video_source_error);
+    }
+    return false;
+  }
+
+  local_video_track_ =
+      peer_connection_factory_->CreateVideoTrack(video_source_, "video_label");
+  auto video_result_or_error =
+      peer_connection_->AddTrack(local_video_track_, {"stream_id"});
+  if (!video_result_or_error.ok()) {
+    RTC_LOG(LS_ERROR) << "Failed to add video track: "
+                      << video_result_or_error.error().message();
+    if (observer_) {
+      observer_->OnError("Failed to add video track");
+    }
+    return false;
+  }
+
+  video_sender_ = video_result_or_error.value();
+  {
+    std::lock_guard<std::mutex> lock(video_source_mutex_);
+    local_video_source_state_ =
+        BuildLocalVideoSourceState(source_config, true);
+  }
+  if (observer_) {
+    observer_->OnLocalVideoTrackAdded(local_video_track_.get());
   }
 
   // 添加音频轨道
@@ -488,7 +608,7 @@ bool WebRTCEngine::AddTracks() {
   auto audio_source = peer_connection_factory_->CreateAudioSource(audio_options);
   local_audio_track_ = peer_connection_factory_->CreateAudioTrack("audio_label", audio_source.get());
   auto result_or_error = peer_connection_->AddTrack(local_audio_track_, {"stream_id"});
-  
+
   if (!result_or_error.ok()) {
     RTC_LOG(LS_ERROR) << "Failed to add audio track: "
                       << result_or_error.error().message();
@@ -498,6 +618,7 @@ bool WebRTCEngine::AddTracks() {
     return false;
   }
 
+  audio_sender_ = result_or_error.value();
   local_audio_track_attached_.store(true);
   RTC_LOG(LS_INFO) << "Local audio track added successfully";
 
@@ -640,6 +761,74 @@ void WebRTCEngine::CollectStats(
   peer_connection_->GetStats(new webrtc::RefCountedObject<StatsCollectorCallback>(std::move(callback)));
 }
 
+bool WebRTCEngine::SetLocalVideoSource(const LocalVideoSourceConfig& config,
+                                       std::string* error_message) {
+  if (!ValidateLocalVideoSourceConfig(config, error_message)) {
+    return false;
+  }
+
+  if (!peer_connection_ || !peer_connection_factory_ || !video_sender_) {
+    std::lock_guard<std::mutex> lock(video_source_mutex_);
+    local_video_source_config_ = config;
+    local_video_source_state_ = BuildLocalVideoSourceState(config, false);
+    return true;
+  }
+
+  auto new_source = CreateVideoSourceForConfig(config, error_message);
+  if (!new_source) {
+    if (error_message && error_message->empty()) {
+      *error_message = "Failed to create the requested local video source.";
+    }
+    return false;
+  }
+
+  auto new_track =
+      peer_connection_factory_->CreateVideoTrack(new_source, "video_label");
+  if (!video_sender_->SetTrack(new_track.get())) {
+    new_source->Stop();
+    if (error_message) {
+      *error_message = "Failed to replace the local video track.";
+    }
+    return false;
+  }
+
+  if (audio_input_switcher_) {
+    if (config.kind == LocalVideoSourceKind::File) {
+      audio_input_switcher_->UseSyntheticPcm(48000, 2);
+      audio_input_switcher_->ClearSyntheticAudio();
+    } else {
+      audio_input_switcher_->UseMicrophone();
+      audio_input_switcher_->ClearSyntheticAudio();
+    }
+  }
+
+  auto previous_source = video_source_;
+  auto previous_track = local_video_track_;
+  {
+    std::lock_guard<std::mutex> lock(video_source_mutex_);
+    local_video_source_config_ = config;
+    local_video_source_state_ = BuildLocalVideoSourceState(config, true);
+    video_source_ = new_source;
+    local_video_track_ = new_track;
+  }
+
+  if (previous_track) {
+    previous_track->set_enabled(false);
+  }
+  if (previous_source) {
+    previous_source->Stop();
+  }
+  if (observer_) {
+    observer_->OnLocalVideoTrackAdded(local_video_track_.get());
+  }
+  return true;
+}
+
+LocalVideoSourceState WebRTCEngine::GetLocalVideoSourceState() const {
+  std::lock_guard<std::mutex> lock(video_source_mutex_);
+  return local_video_source_state_;
+}
+
 void WebRTCEngine::Shutdown() {
   RTC_LOG(LS_INFO) << "Shutting down WebRTC Engine...";
 
@@ -649,6 +838,7 @@ void WebRTCEngine::Shutdown() {
   // 释放工厂（这会停止所有线程）
   peer_connection_factory_ = nullptr;
   audio_device_module_ = nullptr;
+  audio_input_switcher_ = nullptr;
   com_initializer_.reset();
   audio_device_module_available_.store(false);
   recording_available_.store(false);
@@ -661,7 +851,13 @@ void WebRTCEngine::Shutdown() {
     signaling_thread_->Stop();
     signaling_thread_ = nullptr;
   }
-  
+
+  {
+    std::lock_guard<std::mutex> lock(video_source_mutex_);
+    local_video_source_state_ =
+        BuildLocalVideoSourceState(local_video_source_config_, false);
+  }
+
   RTC_LOG(LS_INFO) << "WebRTC Engine shutdown complete";
 }
 

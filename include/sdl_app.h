@@ -87,6 +87,7 @@ class SdlApp : public ICallUIObserver {
   void RenderTopBar(UiSnapshot* snapshot);
   void RenderSidebar(UiSnapshot* snapshot);
   void RenderVideoArea(const UiSnapshot& snapshot);
+  void RenderMediaSourcePanel();
   void RenderStatsPanel();
   void RenderLogDrawer(UiSnapshot* snapshot,
                        const ImVec2& content_pos,
@@ -95,6 +96,8 @@ class SdlApp : public ICallUIObserver {
   void UpdateVideoTexture(VideoRenderer* renderer, VideoTexture* texture);
   std::string GetNowString() const;
   std::string GetCallStateLabel(CallState state) const;
+  std::string GetFileNameForDisplay(const std::string& path) const;
+  std::optional<std::string> PromptForMediaFilePath() const;
   ImVec2 CalculateFitSize(ImVec2 max_size, int width, int height) const;
   UiSnapshot SnapshotState();
   void PushLog(const std::string& level, const std::string& message);

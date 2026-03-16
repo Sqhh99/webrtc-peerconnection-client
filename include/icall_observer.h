@@ -6,6 +6,7 @@
 
 #include "api/media_stream_interface.h"
 #include "callmanager.h"
+#include "local_media_source.h"
 #include "signal_types.h"
 
 // UI观察者接口 - 定义UI层需要实现的回调方法
@@ -92,6 +93,8 @@ class ICallController {
   virtual CallState GetCallState() const = 0;
   virtual std::string GetCurrentPeerId() const = 0;
   virtual std::string GetClientId() const = 0;
+  virtual bool SetLocalVideoSource(const LocalVideoSourceConfig& config) = 0;
+  virtual LocalVideoSourceState GetLocalVideoSourceState() const = 0;
   
   // WebRTC实时数据
   virtual RtcStatsSnapshot GetLatestRtcStats() = 0;

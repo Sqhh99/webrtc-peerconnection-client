@@ -23,7 +23,8 @@ namespace {
 void PrintUsage(const char* program_name) {
   std::cerr << "Usage: " << program_name
             << " --signal-host <host> --signal-port <port> "
-               "[--username <name>]\n";
+               "[--username <name>] [--media-source camera|file] "
+               "[--media-file <path>]\n";
 }
 
 std::optional<AppConfig> ParseAppConfig(int argc, char* argv[]) {
@@ -62,6 +63,26 @@ std::optional<AppConfig> ParseAppConfig(int argc, char* argv[]) {
         return std::nullopt;
       }
       config.username = value;
+    } else if (argument == "--media-source") {
+      const char* value = require_value("--media-source");
+      if (!value) {
+        return std::nullopt;
+      }
+      const std::string source = value;
+      if (source == "camera") {
+        config.local_video_source.kind = LocalVideoSourceKind::Camera;
+      } else if (source == "file") {
+        config.local_video_source.kind = LocalVideoSourceKind::File;
+      } else {
+        std::cerr << "Invalid value for --media-source: " << value << "\n";
+        return std::nullopt;
+      }
+    } else if (argument == "--media-file") {
+      const char* value = require_value("--media-file");
+      if (!value) {
+        return std::nullopt;
+      }
+      config.local_video_source.file_path = value;
     } else if (argument == "--help" || argument == "-h") {
       PrintUsage(argv[0]);
       return std::nullopt;
@@ -72,6 +93,14 @@ std::optional<AppConfig> ParseAppConfig(int argc, char* argv[]) {
   }
 
   if (config.signal_host.empty() || config.signal_port <= 0) {
+    return std::nullopt;
+  }
+  if (!config.local_video_source.file_path.empty()) {
+    config.local_video_source.kind = LocalVideoSourceKind::File;
+  }
+  if (config.local_video_source.kind == LocalVideoSourceKind::File &&
+      config.local_video_source.file_path.empty()) {
+    std::cerr << "--media-file is required when --media-source file is used\n";
     return std::nullopt;
   }
   if (config.username.empty()) {
@@ -104,6 +133,12 @@ int main(int argc, char* argv[]) {
   auto coordinator = std::make_unique<CallCoordinator>(env);
   if (!coordinator->Initialize()) {
     std::cerr << "Failed to initialize CallCoordinator\n";
+    webrtc::CleanupSSL();
+    return 1;
+  }
+  if (!coordinator->SetLocalVideoSource(config->local_video_source)) {
+    std::cerr << "Failed to configure local video source\n";
+    coordinator->Shutdown();
     webrtc::CleanupSSL();
     return 1;
   }
