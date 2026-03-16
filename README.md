@@ -57,11 +57,6 @@ webrtc-signaling-server/
 
 Update the server URL in the app configuration if your deployment target changes.
 
-## Documentation
-
-- Repeated-call video bug analysis:
-  [docs/webrtc-repeat-call-video-debugging.md](docs/webrtc-repeat-call-video-debugging.md)
-
 ## License
 
 BSD 3-Clause. The project license is aligned with the WebRTC source license style.
