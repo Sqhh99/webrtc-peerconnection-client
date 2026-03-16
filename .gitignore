@@ -73,4 +73,6 @@ Debug/
 Release/
 x64/
 Win32/
-webrtc-signaling-server
+
+# Go signaling server build output
+/webrtc-signaling-server/webrtc-signaling-server
