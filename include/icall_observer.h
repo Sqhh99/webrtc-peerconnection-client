@@ -45,6 +45,17 @@ struct RtcStatsSnapshot {
   std::string ice_state;
   std::string local_candidate_summary;
   std::string remote_candidate_summary;
+  bool audio_device_module_available = false;
+  bool recording_available = false;
+  bool playout_available = false;
+  bool local_audio_track_attached = false;
+  bool remote_audio_track_attached = false;
+  bool audio_recording_active = false;
+  bool audio_playout_active = false;
+  bool audio_sending = false;
+  bool audio_receiving = false;
+  double local_audio_level = 0.0;
+  double remote_audio_level = 0.0;
   double outbound_bitrate_kbps = 0.0;
   double inbound_bitrate_kbps = 0.0;
   double current_rtt_ms = 0.0;

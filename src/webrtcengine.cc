@@ -25,11 +25,14 @@
 #include "api/video_codecs/video_encoder_factory_template_libvpx_vp8_adapter.h"
 #include "api/video_codecs/video_encoder_factory_template_libvpx_vp9_adapter.h"
 #include "api/video_codecs/video_encoder_factory_template_open_h264_adapter.h"
+#include "media/engine/adm_helpers.h"
+#include "modules/audio_device/include/audio_device_factory.h"
 #include "modules/video_capture/video_capture_factory.h"
 #include "pc/video_track_source.h"
 #include "rtc_base/checks.h"
 #include "rtc_base/logging.h"
 #include "rtc_base/ref_counted_object.h"
+#include "rtc_base/win/scoped_com_initializer.h"
 #include "api/stats/rtc_stats_collector_callback.h"
 #include "system_wrappers/include/clock.h"
 #include "test/frame_generator.h"
@@ -262,6 +265,45 @@ bool WebRTCEngine::Initialize() {
   webrtc::PeerConnectionFactoryDependencies deps;
   deps.signaling_thread = signaling_thread_.get();
   deps.env = env_;
+  com_initializer_ = std::make_unique<webrtc::ScopedCOMInitializer>(
+      webrtc::ScopedCOMInitializer::kMTA);
+  if (!com_initializer_->Succeeded()) {
+    RTC_LOG(LS_ERROR) << "Failed to initialize COM for audio";
+    com_initializer_.reset();
+    return false;
+  }
+
+  audio_device_module_ =
+      webrtc::CreateWindowsCoreAudioAudioDeviceModule(env_);
+  if (!audio_device_module_) {
+    RTC_LOG(LS_ERROR) << "Failed to create Windows Core Audio device module";
+    return false;
+  }
+
+  const int32_t record_device_result = audio_device_module_->SetRecordingDevice(
+      webrtc::AudioDeviceModule::kDefaultCommunicationDevice);
+  const int32_t playout_device_result = audio_device_module_->SetPlayoutDevice(
+      webrtc::AudioDeviceModule::kDefaultDevice);
+  RTC_LOG(LS_INFO) << "Selected default input/output devices. record_result="
+                   << record_device_result
+                   << ", playout_result=" << playout_device_result;
+
+  webrtc::adm_helpers::Init(audio_device_module_.get());
+  deps.adm = audio_device_module_;
+
+  bool recording_available = false;
+  if (audio_device_module_->RecordingIsAvailable(&recording_available) == 0) {
+    recording_available_.store(recording_available);
+  }
+  bool playout_available = false;
+  if (audio_device_module_->PlayoutIsAvailable(&playout_available) == 0) {
+    playout_available_.store(playout_available);
+  }
+  audio_device_module_available_.store(true);
+  RTC_LOG(LS_INFO) << "Audio device module ready: recording_available="
+                   << recording_available_.load()
+                   << ", playout_available=" << playout_available_.load();
+
   deps.audio_encoder_factory = webrtc::CreateBuiltinAudioEncoderFactory();
   deps.audio_decoder_factory = webrtc::CreateBuiltinAudioDecoderFactory();
   deps.video_encoder_factory =
@@ -396,7 +438,9 @@ void WebRTCEngine::ClosePeerConnection() {
   // 第四步: 释放本地媒体轨道 (释放对source的引用)
   local_video_track_ = nullptr;
   local_audio_track_ = nullptr;
-  
+  local_audio_track_attached_.store(false);
+  remote_audio_track_attached_.store(false);
+
   // 第五步: 释放 video_source (现在引用计数应该为0,触发析构)
   video_source_ = nullptr;
   RTC_LOG(LS_INFO) << "Video source released";
@@ -453,6 +497,9 @@ bool WebRTCEngine::AddTracks() {
     }
     return false;
   }
+
+  local_audio_track_attached_.store(true);
+  RTC_LOG(LS_INFO) << "Local audio track added successfully";
 
   return true;
 }
@@ -595,13 +642,20 @@ void WebRTCEngine::CollectStats(
 
 void WebRTCEngine::Shutdown() {
   RTC_LOG(LS_INFO) << "Shutting down WebRTC Engine...";
-  
+
   // 关闭对等连接
   ClosePeerConnection();
-  
+
   // 释放工厂（这会停止所有线程）
   peer_connection_factory_ = nullptr;
-  
+  audio_device_module_ = nullptr;
+  com_initializer_.reset();
+  audio_device_module_available_.store(false);
+  recording_available_.store(false);
+  playout_available_.store(false);
+  local_audio_track_attached_.store(false);
+  remote_audio_track_attached_.store(false);
+
   // 停止信令线程
   if (signaling_thread_) {
     signaling_thread_->Stop();
@@ -611,6 +665,20 @@ void WebRTCEngine::Shutdown() {
   RTC_LOG(LS_INFO) << "WebRTC Engine shutdown complete";
 }
 
+WebRTCEngine::AudioTransportState WebRTCEngine::GetAudioTransportState() const {
+  AudioTransportState state;
+  state.audio_device_module_available = audio_device_module_available_.load();
+  state.recording_available = recording_available_.load();
+  state.playout_available = playout_available_.load();
+  state.local_audio_track_attached = local_audio_track_attached_.load();
+  state.remote_audio_track_attached = remote_audio_track_attached_.load();
+  if (audio_device_module_) {
+    state.recording_active = audio_device_module_->Recording();
+    state.playout_active = audio_device_module_->Playing();
+  }
+  return state;
+}
+
 // ============================================================================
 // 内部回调方法 - 从观察者类调用
 // ============================================================================
@@ -618,12 +686,15 @@ void WebRTCEngine::Shutdown() {
 void WebRTCEngine::OnPeerConnectionAddTrack(webrtc::RtpReceiverInterface* receiver) {
   RTC_LOG(LS_INFO) << "Track added: " << receiver->id();
   auto* track = receiver->track().get();
-  
+
   if (track->kind() == webrtc::MediaStreamTrackInterface::kVideoKind) {
     auto* video_track = static_cast<webrtc::VideoTrackInterface*>(track);
     if (observer_) {
       observer_->OnRemoteVideoTrackAdded(video_track);
     }
+  } else if (track->kind() == webrtc::MediaStreamTrackInterface::kAudioKind) {
+    remote_audio_track_attached_.store(true);
+    RTC_LOG(LS_INFO) << "Remote audio track added";
   }
 }
 
@@ -635,6 +706,9 @@ void WebRTCEngine::OnPeerConnectionRemoveTrack(webrtc::RtpReceiverInterface* rec
     if (observer_) {
       observer_->OnRemoteVideoTrackRemoved();
     }
+  } else if (track->kind() == webrtc::MediaStreamTrackInterface::kAudioKind) {
+    remote_audio_track_attached_.store(false);
+    RTC_LOG(LS_INFO) << "Remote audio track removed";
   }
 }
 

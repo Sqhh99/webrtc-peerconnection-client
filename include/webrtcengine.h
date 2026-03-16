@@ -1,15 +1,18 @@
 #ifndef WEBRTCENGINE_H_GUARD
 #define WEBRTCENGINE_H_GUARD
 
+#include <atomic>
+#include <functional>
+#include <deque>
 #include <memory>
 #include <string>
 #include <vector>
-#include <deque>
-#include <functional>
+
+#include "api/audio/audio_device.h"
 #include "api/environment/environment.h"
 #include "api/peer_connection_interface.h"
-#include "api/peer_connection_interface.h"
 #include "api/scoped_refptr.h"
+#include "rtc_base/win/scoped_com_initializer.h"
 #include "rtc_base/thread.h"
 #include "signal_types.h"
 
@@ -38,6 +41,16 @@ class WebRTCEngineObserver {
 // WebRTC引擎 - 封装所有WebRTC相关逻辑，与UI完全解耦
 class WebRTCEngine {
  public:
+  struct AudioTransportState {
+    bool audio_device_module_available = false;
+    bool recording_available = false;
+    bool playout_available = false;
+    bool local_audio_track_attached = false;
+    bool remote_audio_track_attached = false;
+    bool recording_active = false;
+    bool playout_active = false;
+  };
+
   explicit WebRTCEngine(const webrtc::Environment& env);
   ~WebRTCEngine();
   
@@ -69,12 +82,13 @@ class WebRTCEngine {
   
   // ICE候选操作
   void AddIceCandidate(const std::string& sdp_mid, int sdp_mline_index, const std::string& candidate);
-  
+
   // 查询状态
   bool IsConnected() const;
   bool HasPeerConnection() const { return peer_connection_ != nullptr; }
   void CollectStats(std::function<void(const webrtc::scoped_refptr<const webrtc::RTCStatsReport>&)> callback);
-  
+  AudioTransportState GetAudioTransportState() const;
+
   // 生命周期
   void Shutdown();
 
@@ -92,12 +106,14 @@ class WebRTCEngine {
   void OnPeerConnectionRemoveTrack(webrtc::RtpReceiverInterface* receiver);
   void OnSessionDescriptionSuccess(webrtc::SessionDescriptionInterface* desc, bool is_offer);
   void OnSessionDescriptionFailure(const std::string& error);
-  
+
   const webrtc::Environment env_;
   std::unique_ptr<webrtc::Thread> signaling_thread_;
+  std::unique_ptr<webrtc::ScopedCOMInitializer> com_initializer_;
   webrtc::scoped_refptr<webrtc::PeerConnectionInterface> peer_connection_;
   webrtc::scoped_refptr<webrtc::PeerConnectionFactoryInterface> peer_connection_factory_;
-  
+  webrtc::scoped_refptr<webrtc::AudioDeviceModule> audio_device_module_;
+
   // 媒体轨道和源引用 - 用于显式停止
   webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> video_source_;
   webrtc::scoped_refptr<webrtc::VideoTrackInterface> local_video_track_;
@@ -109,8 +125,13 @@ class WebRTCEngine {
   WebRTCEngineObserver* observer_;
   std::deque<webrtc::IceCandidate*> pending_ice_candidates_;
   std::vector<IceServerConfig> ice_servers_;  // ICE 服务器配置
-  
+
   bool is_creating_offer_;
+  std::atomic<bool> audio_device_module_available_{false};
+  std::atomic<bool> recording_available_{false};
+  std::atomic<bool> playout_available_{false};
+  std::atomic<bool> local_audio_track_attached_{false};
+  std::atomic<bool> remote_audio_track_attached_{false};
 };
 
 #endif  // WEBRTCENGINE_H_GUARD

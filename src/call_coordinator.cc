@@ -112,13 +112,37 @@ RtcStatsSnapshot CallCoordinator::GetLatestRtcStats() {
         });
   }
 
+  WebRTCEngine::AudioTransportState audio_state;
+  if (webrtc_engine_) {
+    audio_state = webrtc_engine_->GetAudioTransportState();
+  }
+
   std::lock_guard<std::mutex> lock(stats_mutex_);
   if (!has_stats_) {
     RtcStatsSnapshot snapshot = last_stats_;
     snapshot.valid = false;
+    snapshot.audio_device_module_available =
+        audio_state.audio_device_module_available;
+    snapshot.recording_available = audio_state.recording_available;
+    snapshot.playout_available = audio_state.playout_available;
+    snapshot.local_audio_track_attached = audio_state.local_audio_track_attached;
+    snapshot.remote_audio_track_attached =
+        audio_state.remote_audio_track_attached;
+    snapshot.audio_recording_active = audio_state.recording_active;
+    snapshot.audio_playout_active = audio_state.playout_active;
     return snapshot;
   }
-  return last_stats_;
+  RtcStatsSnapshot snapshot = last_stats_;
+  snapshot.audio_device_module_available =
+      audio_state.audio_device_module_available;
+  snapshot.recording_available = audio_state.recording_available;
+  snapshot.playout_available = audio_state.playout_available;
+  snapshot.local_audio_track_attached = audio_state.local_audio_track_attached;
+  snapshot.remote_audio_track_attached =
+      audio_state.remote_audio_track_attached;
+  snapshot.audio_recording_active = audio_state.recording_active;
+  snapshot.audio_playout_active = audio_state.playout_active;
+  return snapshot;
 }
 
 void CallCoordinator::OnLocalVideoTrackAdded(webrtc::VideoTrackInterface* track) {
@@ -443,8 +467,17 @@ void CallCoordinator::ExtractAndStoreRtcStats(
   uint64_t inbound_bytes = 0;
   uint64_t outbound_bytes = 0;
 
+  const webrtc::RTCAudioSourceStats* audio_source = nullptr;
   const webrtc::RTCInboundRtpStreamStats* audio_inbound = nullptr;
   const webrtc::RTCInboundRtpStreamStats* video_inbound = nullptr;
+  const webrtc::RTCOutboundRtpStreamStats* audio_outbound = nullptr;
+
+  const auto audio_source_stats =
+      report->GetStatsOfType<webrtc::RTCAudioSourceStats>();
+  for (const auto* stat : audio_source_stats) {
+    audio_source = stat;
+    break;
+  }
 
   const auto inbound_stats =
       report->GetStatsOfType<webrtc::RTCInboundRtpStreamStats>();
@@ -462,6 +495,10 @@ void CallCoordinator::ExtractAndStoreRtcStats(
       report->GetStatsOfType<webrtc::RTCOutboundRtpStreamStats>();
   for (const auto* stat : outbound_stats) {
     outbound_bytes += stat->bytes_sent.value_or(0u);
+    const std::string kind = stat->kind.value_or("");
+    if (!audio_outbound && kind == "audio") {
+      audio_outbound = stat;
+    }
   }
 
   const auto candidate_pairs =
@@ -502,6 +539,20 @@ void CallCoordinator::ExtractAndStoreRtcStats(
       snapshot.inbound_audio_packet_loss_percent =
           (packets_lost / total_packets) * 100.0;
     }
+    snapshot.remote_audio_level = audio_inbound->audio_level.value_or(0.0);
+    snapshot.audio_receiving =
+        audio_inbound->bytes_received.value_or(0u) > 0u ||
+        audio_inbound->packets_received.value_or(0u) > 0u;
+  }
+
+  if (audio_outbound) {
+    snapshot.audio_sending =
+        audio_outbound->bytes_sent.value_or(0u) > 0u ||
+        audio_outbound->packets_sent.value_or(0u) > 0u;
+  }
+
+  if (audio_source) {
+    snapshot.local_audio_level = audio_source->audio_level.value_or(0.0);
   }
 
   if (video_inbound) {
@@ -521,6 +572,20 @@ void CallCoordinator::ExtractAndStoreRtcStats(
 
   {
     std::lock_guard<std::mutex> lock(stats_mutex_);
+    if (webrtc_engine_) {
+      const auto audio_state = webrtc_engine_->GetAudioTransportState();
+      snapshot.audio_device_module_available =
+          audio_state.audio_device_module_available;
+      snapshot.recording_available = audio_state.recording_available;
+      snapshot.playout_available = audio_state.playout_available;
+      snapshot.local_audio_track_attached =
+          audio_state.local_audio_track_attached;
+      snapshot.remote_audio_track_attached =
+          audio_state.remote_audio_track_attached;
+      snapshot.audio_recording_active = audio_state.recording_active;
+      snapshot.audio_playout_active = audio_state.playout_active;
+    }
+
     if (last_rate_sample_.valid) {
       const uint64_t delta_ms =
           snapshot.timestamp_ms - last_rate_sample_.timestamp_ms;

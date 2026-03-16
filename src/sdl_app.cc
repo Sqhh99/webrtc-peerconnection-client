@@ -478,18 +478,71 @@ void SdlApp::RenderStatsPanel() {
 
   write_stat("ICE", stats.ice_state.empty() ? "-" : stats.ice_state);
   if (!stats.valid) {
+    write_stat("Mic", stats.local_audio_track_attached ? "Track attached" : "-");
+    write_stat("Speaker", stats.audio_playout_active ? "Playing" : "-");
+    write_stat("Remote Audio",
+               stats.remote_audio_track_attached ? "Track attached" : "-");
     write_stat("Outbound", "-");
     write_stat("Inbound", "-");
     write_stat("RTT", "-");
+    write_stat("Audio TX", "-");
+    write_stat("Audio RX", "-");
+    write_stat("Audio Jitter", "-");
+    write_stat("Audio Loss", "-");
     write_stat("Video", "-");
     return;
   }
 
+  std::string mic_status = "Unavailable";
+  if (stats.local_audio_track_attached) {
+    if (stats.audio_recording_active) {
+      mic_status = "Capturing";
+    } else if (stats.recording_available) {
+      mic_status = "Track attached";
+    } else {
+      mic_status = "No input device";
+    }
+  } else if (stats.recording_available) {
+    mic_status = "Idle";
+  }
+
+  std::string speaker_status = "Unavailable";
+  if (stats.audio_playout_active) {
+    speaker_status = "Playing";
+  } else if (stats.playout_available) {
+    speaker_status = "Ready";
+  }
+
+  std::string remote_audio_status = "Waiting";
+  if (stats.remote_audio_track_attached) {
+    remote_audio_status = stats.audio_receiving ? "Receiving" : "Track attached";
+  }
+
+  write_stat("Mic", mic_status);
+  write_stat("Speaker", speaker_status);
+  write_stat("Remote Audio", remote_audio_status);
   write_stat("Outbound", std::to_string(static_cast<int>(stats.outbound_bitrate_kbps)) +
                             " kbps");
   write_stat("Inbound", std::to_string(static_cast<int>(stats.inbound_bitrate_kbps)) +
                            " kbps");
   write_stat("RTT", std::to_string(static_cast<int>(stats.current_rtt_ms)) + " ms");
+  write_stat("Audio TX", stats.audio_sending ? "Sending" : "Idle");
+  write_stat("Audio RX", stats.audio_receiving ? "Receiving" : "Idle");
+  write_stat("Input Level",
+             std::to_string(
+                 static_cast<int>(stats.local_audio_level * 100.0)) +
+                 "%");
+  write_stat("Remote Level",
+             std::to_string(
+                 static_cast<int>(stats.remote_audio_level * 100.0)) +
+                 "%");
+  write_stat("Audio Jitter",
+             std::to_string(static_cast<int>(stats.inbound_audio_jitter_ms)) +
+                 " ms");
+  write_stat("Audio Loss",
+             std::to_string(
+                 static_cast<int>(stats.inbound_audio_packet_loss_percent)) +
+                 "%");
   write_stat("Video",
              std::to_string(stats.inbound_video_width) + "x" +
                  std::to_string(stats.inbound_video_height) + " @ " +
