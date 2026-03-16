@@ -1,22 +1,11 @@
-/*
- *  Copyright 2012 The WebRTC Project Authors. All rights reserved.
- *
- *  Use of this source code is governed by a BSD-style license
- *  that can be found in the LICENSE file in the root of the source
- *  tree. An additional intellectual property rights grant can be found
- *  in the file PATENTS.  All contributing project authors may
- *  be found in the AUTHORS file in the root of the source tree.
- */
-
-// clang-format off
-// Windows headers must be included in specific order
 #include <windows.h>
-#include <shellapi.h>
-// clang-format on
 
+#include <exception>
+#include <iostream>
 #include <memory>
+#include <optional>
+#include <string>
 
-// WebRTC headers
 #include "api/environment/environment.h"
 #include "api/environment/environment_factory.h"
 #include "rtc_base/physical_socket_server.h"
@@ -24,104 +13,114 @@
 #include "rtc_base/thread.h"
 #include "rtc_base/win32_socket_init.h"
 
-// Application headers
+#include "app_config.h"
 #include "call_coordinator.h"
-#include "video_call_window.h"
+#include "defaults.h"
+#include "sdl_app.h"
 
-// Qt headers
-#include <QApplication>
-#include <QTimer>
+namespace {
 
-/**
- * @brief Main entry point for the WebRTC Video Call Client
- * 
- * This application demonstrates a clean architecture using:
- * - CallCoordinator: Business logic and WebRTC coordination
- * - VideoCallWindow: Qt-based UI layer
- * - Observer pattern: Decoupling between layers
- * 
- * @return int Exit code (0 for success, -1 for failure)
- */
-int main(int argc, char* argv[]) {
-  // ============================================================================
-  // 1. Initialize WebRTC infrastructure
-  // ============================================================================
-  
-  // Initialize Winsock for network operations
-  webrtc::WinsockInitializer winsock_init;
-  
-  // Create socket server for WebRTC networking
-  webrtc::PhysicalSocketServer socket_server;
-  webrtc::AutoSocketServerThread main_thread(&socket_server);
-  
-  // Create WebRTC environment
-  webrtc::Environment env = webrtc::CreateEnvironment();
-  
-  // Initialize SSL/TLS support
-  webrtc::InitializeSSL();
+void PrintUsage(const char* program_name) {
+  std::cerr << "Usage: " << program_name
+            << " --signal-host <host> --signal-port <port> "
+               "[--username <name>]\n";
+}
 
-  // ============================================================================
-  // 2. Initialize Qt Application
-  // ============================================================================
-  
-  QApplication app(argc, argv);
-  app.setApplicationName("WebRTC Video Call Client");
-  app.setOrganizationName("NetherLink");
+std::optional<AppConfig> ParseAppConfig(int argc, char* argv[]) {
+  AppConfig config;
 
-  // ============================================================================
-  // 3. Create and initialize business coordinator
-  // ============================================================================
-  
-  auto coordinator = std::make_unique<CallCoordinator>(env);
-  
-  if (!coordinator->Initialize()) {
-    qCritical() << "Failed to initialize CallCoordinator";
-    webrtc::CleanupSSL();
-    return -1;
+  for (int i = 1; i < argc; ++i) {
+    const std::string argument = argv[i];
+    auto require_value = [&](const char* flag_name) -> const char* {
+      if (i + 1 >= argc) {
+        std::cerr << "Missing value for " << flag_name << "\n";
+        return nullptr;
+      }
+      return argv[++i];
+    };
+
+    if (argument == "--signal-host") {
+      const char* value = require_value("--signal-host");
+      if (!value) {
+        return std::nullopt;
+      }
+      config.signal_host = value;
+    } else if (argument == "--signal-port") {
+      const char* value = require_value("--signal-port");
+      if (!value) {
+        return std::nullopt;
+      }
+      try {
+        config.signal_port = std::stoi(value);
+      } catch (const std::exception&) {
+        std::cerr << "Invalid value for --signal-port: " << value << "\n";
+        return std::nullopt;
+      }
+    } else if (argument == "--username") {
+      const char* value = require_value("--username");
+      if (!value) {
+        return std::nullopt;
+      }
+      config.username = value;
+    } else if (argument == "--help" || argument == "-h") {
+      PrintUsage(argv[0]);
+      return std::nullopt;
+    } else {
+      std::cerr << "Unknown argument: " << argument << "\n";
+      return std::nullopt;
+    }
   }
 
-  // ============================================================================
-  // 4. Create and setup UI window
-  // ============================================================================
-  
-  VideoCallWindow main_window(coordinator.get());
-  coordinator->SetUIObserver(&main_window);
-  main_window.show();
+  if (config.signal_host.empty() || config.signal_port <= 0) {
+    return std::nullopt;
+  }
+  if (config.username.empty()) {
+    config.username = GenerateRandomUsername();
+  }
+  config.signal_url = "ws://" + config.signal_host + ":" +
+                      std::to_string(config.signal_port) + "/ws/webrtc";
+  return config;
+}
 
-  // ============================================================================
-  // 5. Setup Windows message processing timer
-  // ============================================================================
-  
-  // Qt and WebRTC use different event loops, so we need to process
-  // Windows messages periodically to keep WebRTC responsive
-  QTimer message_timer;
-  QObject::connect(&message_timer, &QTimer::timeout, []() {
-    MSG msg;
-    while (::PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
-      ::TranslateMessage(&msg);
-      ::DispatchMessage(&msg);
-    }
-  });
-  message_timer.start(10);  // Process every 10ms
+}  // namespace
 
-  // ============================================================================
-  // 6. Run application event loop
-  // ============================================================================
-  
-  int result = app.exec();
+int main(int argc, char* argv[]) {
+  const auto config = ParseAppConfig(argc, argv);
+  if (!config) {
+    PrintUsage(argv[0]);
+    return 1;
+  }
 
-  // ============================================================================
-  // 7. Cleanup resources
-  // ============================================================================
-  
-  message_timer.stop();
-  
-  // Shutdown coordinator and release WebRTC resources
+  webrtc::WinsockInitializer winsock_init;
+  webrtc::PhysicalSocketServer socket_server;
+  webrtc::AutoSocketServerThread main_thread(&socket_server);
+  webrtc::Environment env = webrtc::CreateEnvironment();
+
+  if (!webrtc::InitializeSSL()) {
+    std::cerr << "Failed to initialize WebRTC SSL\n";
+    return 1;
+  }
+
+  auto coordinator = std::make_unique<CallCoordinator>(env);
+  if (!coordinator->Initialize()) {
+    std::cerr << "Failed to initialize CallCoordinator\n";
+    webrtc::CleanupSSL();
+    return 1;
+  }
+
+  SdlApp app(coordinator.get(), *config);
+  coordinator->SetUIObserver(&app);
+  if (!app.Initialize()) {
+    coordinator->Shutdown();
+    webrtc::CleanupSSL();
+    return 1;
+  }
+
+  coordinator->ConnectToSignalServer(config->signal_url, config->username);
+  const int result = app.Run();
+
   coordinator->Shutdown();
   coordinator.reset();
-
-  // Cleanup WebRTC SSL
   webrtc::CleanupSSL();
-  
   return result;
 }

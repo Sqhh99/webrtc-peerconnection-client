@@ -11,7 +11,7 @@
 #include "api/peer_connection_interface.h"
 #include "api/scoped_refptr.h"
 #include "rtc_base/thread.h"
-#include "signalclient.h"  // 包含 IceServerConfig 定义
+#include "signal_types.h"
 
 // WebRTC引擎观察者接口 - 业务层只需实现这个接口即可
 class WebRTCEngineObserver {

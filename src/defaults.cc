@@ -8,11 +8,12 @@
  *  be found in the AUTHORS file in the root of the source tree.
  */
 
-#include "examples/peerconnection/client/defaults.h"
+#include "defaults.h"
 
 #include <cstdint>
 #include <cstdlib>
 #include <iterator>
+#include <random>
 #include <string>
 #include <chrono>  // 添加此头文件用于时间戳
 #include <process.h>
@@ -83,4 +84,16 @@ std::string GetPeerName() {
   ret += "_" + std::to_string(pid) + "_" + std::to_string(timestamp);
 
   return ret;
+}
+
+std::string GenerateRandomUsername() {
+  static constexpr char kAlphabet[] = "0123456789abcdef";
+
+  std::random_device random_device;
+  std::string name = "user-";
+  name.reserve(13);
+  for (int i = 0; i < 8; ++i) {
+    name.push_back(kAlphabet[random_device() % 16]);
+  }
+  return name;
 }

@@ -26,5 +26,6 @@ std::string GetPeerConnectionString();
 std::string GetDefaultServerName();
 std::string GetPeerNameOriginal();
 std::string GetPeerName();
+std::string GenerateRandomUsername();
 
 #endif  // EXAMPLES_PEERCONNECTION_CLIENT_DEFAULTS_H_

@@ -28,16 +28,22 @@ set "BUILD_DIR=%ROOT_DIR%\build\%CONFIG_NAME%"
 
 if not defined WEBRTC_VERSION set "WEBRTC_VERSION=m146.7680.1.0"
 if not defined WEBRTC_PLATFORM set "WEBRTC_PLATFORM=windows_x86_64"
-
-if not defined QT_ROOT if exist "d:\Qt\6.10.0\msvc2022_64" set "QT_ROOT=d:\Qt\6.10.0\msvc2022_64"
+if not defined VCPKG_TARGET_TRIPLET set "VCPKG_TARGET_TRIPLET=x64-windows-static"
 
 call :ensure_vs_env
 if errorlevel 1 exit /b 1
+
+set "PROJECT_VCPKG_ROOT=%ROOT_DIR%\third_party\vcpkg"
+set "PROJECT_VCPKG_INSTALLED_DIR=%ROOT_DIR%\third_party\vcpkg_installed"
+set "PROJECT_VCPKG_TOOLCHAIN=%PROJECT_VCPKG_ROOT%\scripts\buildsystems\vcpkg.cmake"
 
 call :find_cmake
 if errorlevel 1 exit /b 1
 
 call :find_ninja
+if errorlevel 1 exit /b 1
+
+call :ensure_vcpkg
 if errorlevel 1 exit /b 1
 
 call :reset_stale_cmake_cache
@@ -49,17 +55,15 @@ if errorlevel 1 (
     exit /b 1
 )
 
-set "QT_ARG="
-if defined QT_ROOT set "QT_ARG=-DCMAKE_PREFIX_PATH=%QT_ROOT%"
-
 call cmake -S "%ROOT_DIR%" -B "%BUILD_DIR%" -G Ninja ^
     -DCMAKE_MAKE_PROGRAM:FILEPATH="%NINJA_EXE%" ^
     -DCMAKE_BUILD_TYPE=%BUILD_TYPE% ^
-    -DCMAKE_C_COMPILER=clang-cl ^
     -DCMAKE_CXX_COMPILER=clang-cl ^
+    -DCMAKE_TOOLCHAIN_FILE:FILEPATH="%PROJECT_VCPKG_TOOLCHAIN%" ^
+    -DVCPKG_TARGET_TRIPLET=%VCPKG_TARGET_TRIPLET% ^
+    -DVCPKG_INSTALLED_DIR:PATH="%PROJECT_VCPKG_INSTALLED_DIR%" ^
     -DWEBRTC_VERSION=%WEBRTC_VERSION% ^
     -DWEBRTC_PLATFORM=%WEBRTC_PLATFORM% ^
-    %QT_ARG% ^
     !EXTRA_CMAKE_ARGS!
 if errorlevel 1 exit /b 1
 
@@ -101,19 +105,58 @@ if not defined NINJA_EXE (
 
 exit /b 0
 
+:ensure_vcpkg
+if exist "%PROJECT_VCPKG_ROOT%\vcpkg.exe" (
+    if exist "%PROJECT_VCPKG_TOOLCHAIN%" exit /b 0
+)
+
+where git.exe >nul 2>nul
+if errorlevel 1 (
+    echo [build.cmd] git.exe was not found in PATH. Install Git for Windows to bootstrap vcpkg.
+    exit /b 1
+)
+
+if not exist "%PROJECT_VCPKG_ROOT%\.git" (
+    echo [build.cmd] Cloning vcpkg into third_party\vcpkg ...
+    git clone https://github.com/microsoft/vcpkg.git "%PROJECT_VCPKG_ROOT%"
+    if errorlevel 1 (
+        echo [build.cmd] Failed to clone vcpkg.
+        exit /b 1
+    )
+)
+
+if not exist "%PROJECT_VCPKG_ROOT%\vcpkg.exe" (
+    echo [build.cmd] Bootstrapping vcpkg ...
+    call "%PROJECT_VCPKG_ROOT%\bootstrap-vcpkg.bat" -disableMetrics
+    if errorlevel 1 (
+        echo [build.cmd] Failed to bootstrap vcpkg.
+        exit /b 1
+    )
+)
+
+if not exist "%PROJECT_VCPKG_TOOLCHAIN%" (
+    echo [build.cmd] vcpkg toolchain file was not found after bootstrap.
+    exit /b 1
+)
+
+exit /b 0
+
 :reset_stale_cmake_cache
 set "CACHE_FILE=%BUILD_DIR%\CMakeCache.txt"
 if not exist "%CACHE_FILE%" exit /b 0
 
 set "CACHED_NINJA="
+set "CACHED_TOOLCHAIN="
 for /f "usebackq tokens=2 delims==" %%I in (`findstr /B /C:"CMAKE_MAKE_PROGRAM:FILEPATH=" "%CACHE_FILE%"`) do (
     set "CACHED_NINJA=%%I"
 )
+for /f "usebackq tokens=2 delims==" %%I in (`findstr /B /C:"CMAKE_TOOLCHAIN_FILE:FILEPATH=" "%CACHE_FILE%"`) do (
+    set "CACHED_TOOLCHAIN=%%I"
+)
 
-if not defined CACHED_NINJA exit /b 0
-if /I "%CACHED_NINJA%"=="%NINJA_EXE%" exit /b 0
+if /I "%CACHED_NINJA%"=="%NINJA_EXE%" if /I "%CACHED_TOOLCHAIN%"=="%PROJECT_VCPKG_TOOLCHAIN%" exit /b 0
 
-echo [build.cmd] Removing stale CMake cache that points at: %CACHED_NINJA%
+echo [build.cmd] Removing stale CMake cache in %BUILD_DIR%
 if exist "%BUILD_DIR%\CMakeCache.txt" del /f /q "%BUILD_DIR%\CMakeCache.txt" >nul
 if exist "%BUILD_DIR%\CMakeFiles" rmdir /s /q "%BUILD_DIR%\CMakeFiles"
 if exist "%BUILD_DIR%\build.ninja" del /f /q "%BUILD_DIR%\build.ninja" >nul

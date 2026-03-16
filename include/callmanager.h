@@ -1,10 +1,11 @@
 #ifndef EXAMPLES_PEERCONNECTION_CLIENT_CALLMANAGER_H_
 #define EXAMPLES_PEERCONNECTION_CLIENT_CALLMANAGER_H_
 
-#include <QObject>
-#include <QTimer>
+#include <atomic>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 
 #include "signalclient.h"
 
@@ -46,12 +47,10 @@ class CallManagerObserver {
 };
 
 // 呼叫管理器：管理完整的呼叫流程
-class CallManager : public QObject {
-  Q_OBJECT
-
+class CallManager {
  public:
-  explicit CallManager(QObject* parent = nullptr);
-  ~CallManager() override;
+  CallManager();
+  ~CallManager();
 
   // 设置信令客户端（必须在使用前设置）
   void SetSignalClient(SignalClient* signal_client);
@@ -60,7 +59,7 @@ class CallManager : public QObject {
   void RegisterObserver(CallManagerObserver* observer);
   
   // 发起呼叫
-  bool InitiateCall(const QString& target_client_id);
+  bool InitiateCall(const std::string& target_client_id);
   
   // 取消呼叫（主叫方）
   void CancelCall();
@@ -69,47 +68,43 @@ class CallManager : public QObject {
   void AcceptCall();
   
   // 拒绝呼叫（被叫方）
-  void RejectCall(const QString& reason = QString());
+  void RejectCall(const std::string& reason = "");
   
   // 结束通话
   void EndCall();
   
   // 获取当前状态
-  CallState GetCallState() const { return call_state_; }
-  QString GetCurrentPeer() const { return current_peer_; }
-  bool IsInCall() const { return call_state_ != CallState::Idle; }
+  CallState GetCallState() const;
+  std::string GetCurrentPeer() const;
+  bool IsInCall() const;
   
   // 通知对等连接已建立（由Conductor调用）
   void NotifyPeerConnectionEstablished();
   
   // 处理来自信令服务器的消息（由Conductor调用）
-  void HandleCallRequest(const QString& from);
-  void HandleCallResponse(const QString& from, bool accepted, const QString& reason);
-  void HandleCallCancel(const QString& from, const QString& reason);
-  void HandleCallEnd(const QString& from, const QString& reason);
-
- signals:
-  void CallStateChanged(CallState state, QString peer_id);
-  void IncomingCall(QString caller_id);
-
- private slots:
-  void OnCallRequestTimeout();
+  void HandleCallRequest(const std::string& from);
+  void HandleCallResponse(const std::string& from, bool accepted, const std::string& reason);
+  void HandleCallCancel(const std::string& from, const std::string& reason);
+  void HandleCallEnd(const std::string& from, const std::string& reason);
 
  private:
+  void OnCallRequestTimeout();
   void SetCallState(CallState state);
   void CleanupCall();
   void StartCallRequestTimer();
   void StopCallRequestTimer();
-  
+  void StopCallRequestTimerLocked();
+
+  mutable std::mutex mutex_;
   SignalClient* signal_client_;
   CallManagerObserver* observer_;
-  
+
   CallState call_state_;
-  QString current_peer_;
+  std::string current_peer_;
   bool is_caller_;  // 是否是主叫方
-  
-  std::unique_ptr<QTimer> call_request_timer_;
-  
+  std::jthread call_request_timer_thread_;
+  std::atomic<uint64_t> timer_generation_{0};
+
   static constexpr int kCallRequestTimeoutMs = 30000;  // 30秒超时
 };
 

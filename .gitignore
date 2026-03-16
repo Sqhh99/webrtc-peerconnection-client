@@ -18,6 +18,7 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.temp
+imgui.ini
 
 # Logs
 *.log

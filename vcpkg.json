@@ -1,0 +1,19 @@
+{
+  "name": "peerconnection-client",
+  "version-string": "0.1.0",
+  "dependencies": [
+    "boost-asio",
+    "boost-beast",
+    "boost-system",
+    "nlohmann-json",
+    "sdl3",
+    {
+      "name": "imgui",
+      "default-features": false,
+      "features": [
+        "dx11-binding",
+        "sdl3-binding"
+      ]
+    }
+  ]
+}

@@ -2,29 +2,16 @@
 #define CALL_COORDINATOR_H_GUARD
 
 #include <memory>
-#include <string>
 #include <mutex>
-
-// Fix Qt emit macro conflict with WebRTC sigslot
-#ifdef emit
-#undef emit
-#define QT_NO_EMIT_DEFINED
-#endif
+#include <string>
 
 #include "api/environment/environment.h"
 #include "api/peer_connection_interface.h"
 #include "webrtcengine.h"
 
-#ifdef QT_NO_EMIT_DEFINED
-#define emit
-#undef QT_NO_EMIT_DEFINED
-#endif
-
 #include "icall_observer.h"
 #include "signalclient.h"
 #include "callmanager.h"
-#include <QJsonObject>
-#include <QJsonArray>
 
 namespace webrtc {
 class RTCStatsReport;
@@ -76,15 +63,15 @@ class CallCoordinator : public WebRTCEngineObserver,
   void OnDisconnected() override;
   void OnConnectionError(const std::string& error) override;
   void OnIceServersReceived(const std::vector<IceServerConfig>& ice_servers) override;
-  void OnClientListUpdate(const QJsonArray& clients) override;
+  void OnClientListUpdate(const std::vector<ClientInfo>& clients) override;
   void OnUserOffline(const std::string& client_id) override;
-  void OnCallRequest(const std::string& from, const QJsonObject& payload) override;
+  void OnCallRequest(const std::string& from) override;
   void OnCallResponse(const std::string& from, bool accepted, const std::string& reason) override;
   void OnCallCancel(const std::string& from, const std::string& reason) override;
   void OnCallEnd(const std::string& from, const std::string& reason) override;
-  void OnOffer(const std::string& from, const QJsonObject& sdp) override;
-  void OnAnswer(const std::string& from, const QJsonObject& sdp) override;
-  void OnIceCandidate(const std::string& from, const QJsonObject& candidate) override;
+  void OnOffer(const std::string& from, const SessionDescriptionPayload& sdp) override;
+  void OnAnswer(const std::string& from, const SessionDescriptionPayload& sdp) override;
+  void OnIceCandidate(const std::string& from, const IceCandidatePayload& candidate) override;
 
   // CallManagerObserver 实现
   void OnCallStateChanged(CallState state, const std::string& peer_id) override;
@@ -98,9 +85,9 @@ class CallCoordinator : public WebRTCEngineObserver,
   void OnNeedClosePeerConnection() override;
 
  private:
-  void ProcessOffer(const std::string& from, const QJsonObject& sdp);
-  void ProcessAnswer(const std::string& from, const QJsonObject& sdp);
-  void ProcessIceCandidate(const std::string& from, const QJsonObject& candidate);
+  void ProcessOffer(const std::string& from, const SessionDescriptionPayload& sdp);
+  void ProcessAnswer(const std::string& from, const SessionDescriptionPayload& sdp);
+  void ProcessIceCandidate(const std::string& from, const IceCandidatePayload& candidate);
   void ExtractAndStoreRtcStats(const webrtc::scoped_refptr<const webrtc::RTCStatsReport>& report);
   std::string IceStateToString(webrtc::PeerConnectionInterface::IceConnectionState state) const;
 

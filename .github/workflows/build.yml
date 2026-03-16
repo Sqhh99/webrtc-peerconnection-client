@@ -8,6 +8,7 @@ on:
 env:
   WEBRTC_VERSION: m146.7680.1.0
   WEBRTC_PLATFORM: windows_x86_64
+  VCPKG_TARGET_TRIPLET: x64-windows-static
 
 jobs:
   build-windows:
@@ -20,26 +21,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Qt 6.10.0
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: "6.10.0"
-          host: windows
-          target: desktop
-          arch: win64_msvc2022_64
-          cache: true
-
-      - name: Cache WebRTC prebuilts
+      - name: Cache Third Party Dependencies
         uses: actions/cache@v4
         with:
           path: |
             third_party/_downloads
             third_party/webrtc
-          key: webrtc-${{ runner.os }}-${{ env.WEBRTC_VERSION }}-${{ env.WEBRTC_PLATFORM }}
+            third_party/vcpkg
+            third_party/vcpkg_installed
+          key: deps-${{ runner.os }}-${{ env.WEBRTC_VERSION }}-${{ env.WEBRTC_PLATFORM }}-${{ env.VCPKG_TARGET_TRIPLET }}-${{ hashFiles('vcpkg.json') }}
 
       - name: Build Release
         run: |
-          set QT_ROOT=%QT_ROOT_DIR%
           call build.cmd release
 
       - name: Upload executable

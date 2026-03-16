@@ -1,11 +1,12 @@
 #ifndef ICALL_OBSERVER_H_GUARD
 #define ICALL_OBSERVER_H_GUARD
 
-#include <string>
 #include <cstdint>
+#include <string>
+
 #include "api/media_stream_interface.h"
 #include "callmanager.h"
-#include <QJsonArray>
+#include "signal_types.h"
 
 // UI观察者接口 - 定义UI层需要实现的回调方法
 // 这样Coordinator就不需要依赖具体的UI实现
@@ -30,7 +31,7 @@ class ICallUIObserver {
   virtual void OnSignalError(const std::string& error) = 0;
   
   // 客户端列表更新
-  virtual void OnClientListUpdate(const QJsonArray& clients) = 0;
+  virtual void OnClientListUpdate(const std::vector<ClientInfo>& clients) = 0;
   
   // 呼叫状态回调
   virtual void OnCallStateChanged(CallState state, const std::string& peer_id) = 0;
