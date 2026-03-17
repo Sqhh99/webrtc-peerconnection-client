@@ -515,6 +515,11 @@ func (c *WebRTCClient) trySend(message []byte) bool {
 	if atomic.LoadUint32(&c.closed) != 0 {
 		return false
 	}
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("Dropped message for closed client channel %s: %v", c.uid, r)
+		}
+	}()
 	select {
 	case c.send <- message:
 		return true
