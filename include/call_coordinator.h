@@ -1,9 +1,11 @@
 #ifndef CALL_COORDINATOR_H_GUARD
 #define CALL_COORDINATOR_H_GUARD
 
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 
 #include "api/environment/environment.h"
 #include "api/peer_connection_interface.h"
@@ -99,6 +101,9 @@ class CallCoordinator : public WebRTCEngineObserver,
   void ProcessIceCandidate(const std::string& from, const IceCandidatePayload& candidate);
   void ExtractAndStoreRtcStats(const webrtc::scoped_refptr<const webrtc::RTCStatsReport>& report);
   std::string IceStateToString(webrtc::PeerConnectionInterface::IceConnectionState state) const;
+  void StartIceDisconnectWatchdog();
+  void StopIceDisconnectWatchdog();
+  void StopIceDisconnectWatchdogLocked();
 
   // 组件
   const webrtc::Environment env_;
@@ -118,6 +123,11 @@ class CallCoordinator : public WebRTCEngineObserver,
   mutable std::mutex stats_mutex_;
   RtcStatsSnapshot last_stats_;
   bool has_stats_ = false;
+  std::atomic<bool> shutdown_started_{false};
+  const std::shared_ptr<void> lifetime_guard_ = std::make_shared<int>(0);
+  mutable std::mutex ice_disconnect_watchdog_mutex_;
+  std::jthread ice_disconnect_watchdog_thread_;
+  std::atomic<uint64_t> ice_disconnect_watchdog_generation_{0};
   struct RateSample {
     uint64_t inbound_bytes = 0;
     uint64_t outbound_bytes = 0;
@@ -125,6 +135,7 @@ class CallCoordinator : public WebRTCEngineObserver,
     bool valid = false;
   };
   RateSample last_rate_sample_;
+  static constexpr int kIceDisconnectTimeoutMs = 10000;
 };
 
 #endif  // CALL_COORDINATOR_H_GUARD

@@ -11,6 +11,7 @@ obj/
 *.swp
 *.swo
 *~
+.cache
 
 # OS files
 .DS_Store

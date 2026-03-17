@@ -2,6 +2,7 @@
 #define WEBRTCENGINE_H_GUARD
 
 #include <atomic>
+#include <cstdint>
 #include <functional>
 #include <deque>
 #include <memory>
@@ -106,6 +107,9 @@ class WebRTCEngine {
   class CreateSessionDescriptionObserverImpl;
   class StatsCollectorCallback;
 
+  std::weak_ptr<void> GetPeerConnectionCallbackGuard() const;
+  void RenewPeerConnectionCallbackGuard();
+  void ResetPeerConnectionCallbackGuard();
   void SetRemoteDescription(const std::string& type, const std::string& sdp);
   void ProcessPendingIceCandidates();
   void LogRemoteMediaState(const char* reason) const;
@@ -151,10 +155,13 @@ class WebRTCEngine {
   std::deque<webrtc::IceCandidate*> pending_ice_candidates_;
   std::vector<IceServerConfig> ice_servers_;  // ICE 服务器配置
 
+  mutable std::mutex callback_guard_mutex_;
+  std::shared_ptr<void> peer_connection_callback_guard_;
   mutable std::mutex video_source_mutex_;
   LocalVideoSourceConfig local_video_source_config_;
   LocalVideoSourceState local_video_source_state_;
   bool is_creating_offer_;
+  std::atomic<bool> shutdown_started_{false};
   std::atomic<bool> audio_device_module_available_{false};
   std::atomic<bool> recording_available_{false};
   std::atomic<bool> playout_available_{false};

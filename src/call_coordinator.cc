@@ -1,5 +1,6 @@
 #include "call_coordinator.h"
 
+#include <chrono>
 #include <filesystem>
 #include <utility>
 
@@ -39,6 +40,23 @@ bool CallCoordinator::Initialize() {
 }
 
 void CallCoordinator::Shutdown() {
+  if (shutdown_started_.exchange(true)) {
+    return;
+  }
+
+  StopIceDisconnectWatchdog();
+
+  ui_observer_ = nullptr;
+  if (call_manager_) {
+    call_manager_->RegisterObserver(nullptr);
+  }
+  if (signal_client_) {
+    signal_client_->RegisterObserver(nullptr);
+  }
+  if (webrtc_engine_) {
+    webrtc_engine_->SetObserver(nullptr);
+  }
+
   if (signal_client_) {
     signal_client_->Disconnect();
   }
@@ -212,15 +230,26 @@ void CallCoordinator::OnIceConnectionStateChanged(
 
   if (state == webrtc::PeerConnectionInterface::kIceConnectionConnected ||
       state == webrtc::PeerConnectionInterface::kIceConnectionCompleted) {
+    StopIceDisconnectWatchdog();
     if (call_manager_) {
       call_manager_->NotifyPeerConnectionEstablished();
     }
   } else if (state == webrtc::PeerConnectionInterface::kIceConnectionFailed ||
              state == webrtc::PeerConnectionInterface::kIceConnectionDisconnected ||
              state == webrtc::PeerConnectionInterface::kIceConnectionClosed) {
-    if (ui_observer_) {
-      ui_observer_->OnLogMessage("ICE connection closed", "warning");
+    const bool should_watch =
+        call_manager_ && call_manager_->GetCallState() == CallState::Connected;
+    if (should_watch) {
+      StartIceDisconnectWatchdog();
+    } else {
+      StopIceDisconnectWatchdog();
     }
+    if (ui_observer_) {
+      ui_observer_->OnLogMessage("ICE connection state changed to " + state_text,
+                                 "warning");
+    }
+  } else {
+    StopIceDisconnectWatchdog();
   }
 }
 
@@ -305,9 +334,25 @@ void CallCoordinator::OnClientListUpdate(const std::vector<ClientInfo>& clients)
 }
 
 void CallCoordinator::OnUserOffline(const std::string& client_id) {
-  if (client_id == current_peer_id_ && call_manager_) {
-    call_manager_->EndCall();
+  if (client_id != current_peer_id_ || !call_manager_) {
+    return;
   }
+
+  const CallState call_state = call_manager_->GetCallState();
+  RTC_LOG(LS_WARNING) << "Received user-offline for active peer " << client_id
+                      << ", current call state="
+                      << static_cast<int>(call_state);
+
+  if (call_state == CallState::Connected) {
+    if (ui_observer_) {
+      ui_observer_->OnLogMessage(
+          "Peer went offline on signaling server, but media session is kept alive.",
+          "warning");
+    }
+    return;
+  }
+
+  call_manager_->EndCall();
 }
 
 void CallCoordinator::OnCallRequest(const std::string& from,
@@ -337,6 +382,8 @@ void CallCoordinator::OnCallCancel(const std::string& from,
 void CallCoordinator::OnCallEnd(const std::string& from,
                                 const std::string& call_id,
                                 const std::string& reason) {
+  RTC_LOG(LS_INFO) << "Received call-end from " << from
+                   << ", call_id=" << call_id << ", reason=" << reason;
   if (call_manager_) {
     call_manager_->HandleCallEnd(from, call_id, reason);
   }
@@ -361,6 +408,9 @@ void CallCoordinator::OnCallStateChanged(CallState state,
                                          const std::string& peer_id) {
   if (state == CallState::Idle) {
     current_peer_id_.clear();
+  }
+  if (state != CallState::Connected) {
+    StopIceDisconnectWatchdog();
   }
   if (ui_observer_) {
     ui_observer_->OnCallStateChanged(state, peer_id);
@@ -422,6 +472,8 @@ void CallCoordinator::OnCallTimeout() {
 
 void CallCoordinator::OnNeedCreatePeerConnection(const std::string& peer_id,
                                                  bool is_caller) {
+  StopIceDisconnectWatchdog();
+
   current_peer_id_ = peer_id;
   is_caller_ = is_caller;
 
@@ -449,6 +501,7 @@ void CallCoordinator::OnNeedCreatePeerConnection(const std::string& peer_id,
 }
 
 void CallCoordinator::OnNeedClosePeerConnection() {
+  StopIceDisconnectWatchdog();
   if (ui_observer_) {
     ui_observer_->OnStopLocalRenderer();
     ui_observer_->OnStopRemoteRenderer();
@@ -456,6 +509,82 @@ void CallCoordinator::OnNeedClosePeerConnection() {
   if (webrtc_engine_) {
     webrtc_engine_->ClosePeerConnection();
   }
+}
+
+void CallCoordinator::StartIceDisconnectWatchdog() {
+  std::lock_guard<std::mutex> lock(ice_disconnect_watchdog_mutex_);
+  StopIceDisconnectWatchdogLocked();
+
+  const uint64_t generation = ++ice_disconnect_watchdog_generation_;
+  ice_disconnect_watchdog_thread_ = std::jthread(
+      [this, generation](std::stop_token stop_token) {
+        const auto deadline =
+            std::chrono::steady_clock::now() +
+            std::chrono::milliseconds(kIceDisconnectTimeoutMs);
+        while (!stop_token.stop_requested() &&
+               std::chrono::steady_clock::now() < deadline) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        if (stop_token.stop_requested() ||
+            ice_disconnect_watchdog_generation_.load() != generation) {
+          return;
+        }
+        if (!call_manager_) {
+          return;
+        }
+        if (call_manager_->GetCallState() != CallState::Connected) {
+          return;
+        }
+
+        RTC_LOG(LS_WARNING)
+            << "ICE remained disconnected/failed for "
+            << kIceDisconnectTimeoutMs
+            << " ms, ending call to avoid hanging in connected state.";
+        if (!signal_client_) {
+          return;
+        }
+        std::weak_ptr<void> lifetime_guard = lifetime_guard_;
+        signal_client_->InvokeOnIoThread([this, generation, lifetime_guard]() {
+          if (lifetime_guard.expired() || shutdown_started_.load() ||
+              ice_disconnect_watchdog_generation_.load() != generation ||
+              !call_manager_ ||
+              call_manager_->GetCallState() != CallState::Connected) {
+            return;
+          }
+          if (ui_observer_) {
+            ui_observer_->OnLogMessage(
+                "ICE disconnected for too long. Ending the call automatically.",
+                "warning");
+          }
+          call_manager_->EndCall();
+        });
+      });
+}
+
+void CallCoordinator::StopIceDisconnectWatchdog() {
+  std::lock_guard<std::mutex> lock(ice_disconnect_watchdog_mutex_);
+  StopIceDisconnectWatchdogLocked();
+}
+
+void CallCoordinator::StopIceDisconnectWatchdogLocked() {
+  ++ice_disconnect_watchdog_generation_;
+  if (!ice_disconnect_watchdog_thread_.joinable()) {
+    return;
+  }
+
+  ice_disconnect_watchdog_thread_.request_stop();
+  if (ice_disconnect_watchdog_thread_.get_id() == std::this_thread::get_id()) {
+    std::jthread self_thread = std::move(ice_disconnect_watchdog_thread_);
+    std::thread joiner([thread = std::move(self_thread)]() mutable {
+      if (thread.joinable()) {
+        thread.join();
+      }
+    });
+    joiner.detach();
+    return;
+  }
+
+  ice_disconnect_watchdog_thread_.join();
 }
 
 void CallCoordinator::ProcessOffer(const std::string& from,

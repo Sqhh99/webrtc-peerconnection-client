@@ -202,59 +202,92 @@ class CapturerTrackSource : public ManagedVideoTrackSource {
 // PeerConnectionObserver的内部实现
 class WebRTCEngine::PeerConnectionObserverImpl : public webrtc::PeerConnectionObserver {
  public:
-  explicit PeerConnectionObserverImpl(WebRTCEngine* engine) : engine_(engine) {}
+  explicit PeerConnectionObserverImpl(WebRTCEngine* engine,
+                                      std::weak_ptr<void> callback_guard)
+      : engine_(engine), callback_guard_(std::move(callback_guard)) {}
 
   void OnSignalingChange(webrtc::PeerConnectionInterface::SignalingState new_state) override {}
   void OnTrack(
       webrtc::scoped_refptr<webrtc::RtpTransceiverInterface> transceiver) override {
+    if (callback_guard_.expired()) {
+      return;
+    }
     engine_->OnPeerConnectionTrack(transceiver.get());
   }
   void OnAddTrack(webrtc::scoped_refptr<webrtc::RtpReceiverInterface> receiver,
                   const std::vector<webrtc::scoped_refptr<webrtc::MediaStreamInterface>>& streams) override {
+    if (callback_guard_.expired()) {
+      return;
+    }
     engine_->OnPeerConnectionAddTrack(receiver.get());
   }
   void OnRemoveTrack(webrtc::scoped_refptr<webrtc::RtpReceiverInterface> receiver) override {
+    if (callback_guard_.expired()) {
+      return;
+    }
     engine_->OnPeerConnectionRemoveTrack(receiver.get());
   }
   void OnDataChannel(webrtc::scoped_refptr<webrtc::DataChannelInterface> channel) override {}
   void OnRenegotiationNeeded() override {}
   void OnIceConnectionChange(webrtc::PeerConnectionInterface::IceConnectionState new_state) override {
+    if (callback_guard_.expired()) {
+      return;
+    }
     engine_->OnPeerConnectionIceConnectionChange(new_state);
   }
   void OnIceGatheringChange(webrtc::PeerConnectionInterface::IceGatheringState new_state) override {}
   void OnIceCandidate(const webrtc::IceCandidate* candidate) override {
+    if (callback_guard_.expired()) {
+      return;
+    }
     engine_->OnPeerConnectionIceCandidate(candidate);
   }
   void OnIceConnectionReceivingChange(bool receiving) override {}
   void OnIceCandidateRemoved(const webrtc::IceCandidate* candidate) override {}
-  
+
  private:
   WebRTCEngine* engine_;
+  std::weak_ptr<void> callback_guard_;
 };
 
 // CreateSessionDescriptionObserver的内部实现
 class WebRTCEngine::CreateSessionDescriptionObserverImpl : public webrtc::CreateSessionDescriptionObserver {
  public:
   static webrtc::scoped_refptr<CreateSessionDescriptionObserverImpl> Create(
-      WebRTCEngine* engine, bool is_offer) {
-    return webrtc::make_ref_counted<CreateSessionDescriptionObserverImpl>(engine, is_offer);
+      WebRTCEngine* engine,
+      std::weak_ptr<void> callback_guard,
+      bool is_offer) {
+    return webrtc::make_ref_counted<CreateSessionDescriptionObserverImpl>(
+        engine, std::move(callback_guard), is_offer);
   }
-  
-  explicit CreateSessionDescriptionObserverImpl(WebRTCEngine* engine, bool is_offer)
-      : engine_(engine), is_offer_(is_offer) {}
-  
+
+  explicit CreateSessionDescriptionObserverImpl(WebRTCEngine* engine,
+                                                std::weak_ptr<void> callback_guard,
+                                                bool is_offer)
+      : engine_(engine),
+        callback_guard_(std::move(callback_guard)),
+        is_offer_(is_offer) {}
+
   void OnSuccess(webrtc::SessionDescriptionInterface* desc) override {
+    if (callback_guard_.expired()) {
+      delete desc;
+      return;
+    }
     RTC_LOG(LS_INFO) << "=== CreateSessionDescriptionObserver::OnSuccess called, is_offer: " << is_offer_ << " ===";
     engine_->OnSessionDescriptionSuccess(desc, is_offer_);
   }
-  
+
   void OnFailure(webrtc::RTCError error) override {
+    if (callback_guard_.expired()) {
+      return;
+    }
     RTC_LOG(LS_ERROR) << "=== CreateSessionDescriptionObserver::OnFailure called: " << error.message() << " ===";
     engine_->OnSessionDescriptionFailure(error.message());
   }
-  
+
  private:
   WebRTCEngine* engine_;
+  std::weak_ptr<void> callback_guard_;
   bool is_offer_;
 };
 
@@ -296,6 +329,21 @@ void WebRTCEngine::SetObserver(WebRTCEngineObserver* observer) {
 void WebRTCEngine::SetIceServers(const std::vector<IceServerConfig>& ice_servers) {
   ice_servers_ = ice_servers;
   RTC_LOG(LS_INFO) << "Updated ICE servers configuration, count: " << ice_servers_.size();
+}
+
+std::weak_ptr<void> WebRTCEngine::GetPeerConnectionCallbackGuard() const {
+  std::lock_guard<std::mutex> lock(callback_guard_mutex_);
+  return peer_connection_callback_guard_;
+}
+
+void WebRTCEngine::RenewPeerConnectionCallbackGuard() {
+  std::lock_guard<std::mutex> lock(callback_guard_mutex_);
+  peer_connection_callback_guard_ = std::make_shared<int>(0);
+}
+
+void WebRTCEngine::ResetPeerConnectionCallbackGuard() {
+  std::lock_guard<std::mutex> lock(callback_guard_mutex_);
+  peer_connection_callback_guard_.reset();
 }
 
 bool WebRTCEngine::ValidateLocalVideoSourceConfig(
@@ -484,8 +532,11 @@ bool WebRTCEngine::CreatePeerConnection() {
   config.continual_gathering_policy = 
       webrtc::PeerConnectionInterface::GATHER_CONTINUALLY;
 
-  // 创建并保存内部观察者 - 必须保持存活!
-  pc_observer_ = std::make_unique<PeerConnectionObserverImpl>(this);
+  RenewPeerConnectionCallbackGuard();
+
+  // 每个 PeerConnection 使用独立 observer，避免并发修改 observer 内部状态。
+  pc_observer_ = std::make_unique<PeerConnectionObserverImpl>(
+      this, GetPeerConnectionCallbackGuard());
   webrtc::PeerConnectionDependencies pc_dependencies(pc_observer_.get());
   auto error_or_peer_connection =
       peer_connection_factory_->CreatePeerConnectionOrError(
@@ -498,15 +549,18 @@ bool WebRTCEngine::CreatePeerConnection() {
   } else {
     RTC_LOG(LS_ERROR) << "CreatePeerConnection failed: "
                       << error_or_peer_connection.error().message();
+    ResetPeerConnectionCallbackGuard();
+    pc_observer_.reset();
     if (observer_) {
       observer_->OnError(error_or_peer_connection.error().message());
     }
-    pc_observer_.reset();  // 清理观察者
     return false;
   }
 }
 
 void WebRTCEngine::ClosePeerConnection() {
+  ResetPeerConnectionCallbackGuard();
+
   RTC_LOG(LS_INFO) << "Closing peer connection...";
 
   // 第一步: 显式停止摄像头采集(最重要!)
@@ -525,7 +579,14 @@ void WebRTCEngine::ClosePeerConnection() {
     local_audio_track_->set_enabled(false);
     RTC_LOG(LS_INFO) << "Local audio track disabled";
   }
-  
+
+  if (audio_input_switcher_) {
+    RTC_LOG(LS_INFO) << "Stopping audio input before peer connection close";
+    audio_input_switcher_->StopRecording();
+    audio_input_switcher_->ClearSyntheticAudio();
+    RTC_LOG(LS_INFO) << "Audio input stopped";
+  }
+
   // 第三步: 移除 PeerConnection 中的所有 senders (释放对track的引用)
   if (peer_connection_) {
     auto senders = peer_connection_->GetSenders();
@@ -548,27 +609,27 @@ void WebRTCEngine::ClosePeerConnection() {
   audio_sender_ = nullptr;
   local_audio_track_attached_.store(false);
   remote_audio_track_attached_.store(false);
+  RTC_LOG(LS_INFO) << "Local and remote track references released";
 
   // 第五步: 释放 video_source (现在引用计数应该为0,触发析构)
+  RTC_LOG(LS_INFO) << "Releasing video source";
   video_source_ = nullptr;
   {
     std::lock_guard<std::mutex> lock(video_source_mutex_);
     local_video_source_state_ =
         BuildLocalVideoSourceState(local_video_source_config_, false);
   }
-  if (audio_input_switcher_) {
-    audio_input_switcher_->UseMicrophone();
-    audio_input_switcher_->ClearSyntheticAudio();
-  }
   RTC_LOG(LS_INFO) << "Video source released";
-  
-  // 第六步: 清理观察者和其他资源
-  pc_observer_.reset();
+
+  // 第六步: 清理其他资源
   for (auto* candidate : pending_ice_candidates_) {
     delete candidate;
   }
   pending_ice_candidates_.clear();
-  
+
+  // 每次关闭后释放当前 observer，下一次创建新的 observer。
+  pc_observer_.reset();
+
   RTC_LOG(LS_INFO) << "Peer connection closed successfully";
 }
 
@@ -680,7 +741,8 @@ void WebRTCEngine::CreateOffer() {
   options.offer_to_receive_audio = true;
   options.offer_to_receive_video = true;
   
-  auto observer = CreateSessionDescriptionObserverImpl::Create(this, true);
+  auto observer = CreateSessionDescriptionObserverImpl::Create(
+      this, GetPeerConnectionCallbackGuard(), true);
   peer_connection_->CreateOffer(observer.get(), options);
   RTC_LOG(LS_INFO) << "CreateOffer called on peer_connection";
 }
@@ -695,7 +757,8 @@ void WebRTCEngine::CreateAnswer() {
   is_creating_offer_ = false;
   webrtc::PeerConnectionInterface::RTCOfferAnswerOptions options;
   
-  auto observer = CreateSessionDescriptionObserverImpl::Create(this, false);
+  auto observer = CreateSessionDescriptionObserverImpl::Create(
+      this, GetPeerConnectionCallbackGuard(), false);
   peer_connection_->CreateAnswer(observer.get(), options);
   RTC_LOG(LS_INFO) << "CreateAnswer called on peer_connection";
 }
@@ -728,7 +791,12 @@ void WebRTCEngine::SetRemoteDescription(const std::string& type, const std::stri
     return;
   }
 
-  auto observer = SetRemoteDescriptionObserver::Create([this, should_create_answer](webrtc::RTCError error) {
+  std::weak_ptr<void> callback_guard = GetPeerConnectionCallbackGuard();
+  auto observer = SetRemoteDescriptionObserver::Create(
+      [this, callback_guard, should_create_answer](webrtc::RTCError error) {
+    if (callback_guard.expired()) {
+      return;
+    }
     if (!error.ok()) {
       RTC_LOG(LS_ERROR) << "SetRemoteDescription failed: " << error.message();
       if (observer_) {
@@ -943,7 +1011,17 @@ void WebRTCEngine::CollectStats(
     }
     return;
   }
-  peer_connection_->GetStats(new webrtc::RefCountedObject<StatsCollectorCallback>(std::move(callback)));
+  std::weak_ptr<void> callback_guard = GetPeerConnectionCallbackGuard();
+  peer_connection_->GetStats(new webrtc::RefCountedObject<StatsCollectorCallback>(
+      [callback = std::move(callback), callback_guard](
+          const webrtc::scoped_refptr<const webrtc::RTCStatsReport>& report) {
+        if (callback_guard.expired()) {
+          return;
+        }
+        if (callback) {
+          callback(report);
+        }
+      }));
 }
 
 bool WebRTCEngine::SetLocalVideoSource(const LocalVideoSourceConfig& config,
@@ -1015,6 +1093,9 @@ LocalVideoSourceState WebRTCEngine::GetLocalVideoSourceState() const {
 }
 
 void WebRTCEngine::Shutdown() {
+  if (shutdown_started_.exchange(true)) {
+    return;
+  }
   RTC_LOG(LS_INFO) << "Shutting down WebRTC Engine...";
 
   // 关闭对等连接
@@ -1036,6 +1117,7 @@ void WebRTCEngine::Shutdown() {
     signaling_thread_->Stop();
     signaling_thread_ = nullptr;
   }
+  pc_observer_.reset();
 
   {
     std::lock_guard<std::mutex> lock(video_source_mutex_);
@@ -1167,11 +1249,16 @@ void WebRTCEngine::OnPeerConnectionIceCandidate(const webrtc::IceCandidate* cand
 
 void WebRTCEngine::OnSessionDescriptionSuccess(webrtc::SessionDescriptionInterface* desc, bool is_offer) {
   RTC_LOG(LS_INFO) << "=== OnSessionDescriptionSuccess called, is_offer: " << is_offer << " ===";
-  
+
   std::string sdp;
   desc->ToString(&sdp);
 
-  auto observer = SetLocalDescriptionObserver::Create([this, sdp, is_offer](webrtc::RTCError error) {
+  std::weak_ptr<void> callback_guard = GetPeerConnectionCallbackGuard();
+  auto observer = SetLocalDescriptionObserver::Create(
+      [this, callback_guard, sdp, is_offer](webrtc::RTCError error) {
+    if (callback_guard.expired()) {
+      return;
+    }
     if (!error.ok()) {
       RTC_LOG(LS_ERROR) << "SetLocalDescription failed: " << error.message();
       if (observer_) {

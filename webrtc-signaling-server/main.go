@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -13,16 +14,21 @@ import (
 
 // WebRTCSignalingServer WebRTC信令服务器
 type WebRTCSignalingServer struct {
-	clients map[string]*WebRTCClient // map[uid]*WebRTCClient
-	mutex   sync.RWMutex
+	clients            map[string]*WebRTCClient // map[uid]*WebRTCClient
+	clientGenerations  map[string]uint64
+	pendingOfflineJobs map[string]*time.Timer
+	mutex              sync.RWMutex
 }
 
 // WebRTCClient WebRTC客户端连接
 type WebRTCClient struct {
-	uid    string
-	conn   *websocket.Conn
-	server *WebRTCSignalingServer
-	send   chan []byte
+	uid        string
+	generation uint64
+	conn       *websocket.Conn
+	server     *WebRTCSignalingServer
+	send       chan []byte
+	closed     uint32
+	closeOnce  sync.Once
 }
 
 // WebRTCMessage WebRTC信令消息结构
@@ -39,6 +45,8 @@ type IceServer struct {
 	Username   string   `json:"username,omitempty"`
 	Credential string   `json:"credential,omitempty"`
 }
+
+const offlineGracePeriod = 5 * time.Second
 
 var (
 	addr     = flag.String("addr", ":8081", "http service address")
@@ -101,7 +109,9 @@ func handleWebRTCConnection(w http.ResponseWriter, r *http.Request) {
 // NewWebRTCSignalingServer 创建新的WebRTC信令服务器
 func NewWebRTCSignalingServer() *WebRTCSignalingServer {
 	return &WebRTCSignalingServer{
-		clients: make(map[string]*WebRTCClient),
+		clients:            make(map[string]*WebRTCClient),
+		clientGenerations:  make(map[string]uint64),
+		pendingOfflineJobs: make(map[string]*time.Timer),
 	}
 }
 
@@ -116,6 +126,17 @@ func (s *WebRTCSignalingServer) HandleConnection(conn *websocket.Conn, uid strin
 
 	// 处理重复登录
 	s.mutex.Lock()
+	if pendingOfflineJob, ok := s.pendingOfflineJobs[uid]; ok {
+		if pendingOfflineJob.Stop() {
+			log.Printf("Cancelled pending offline notification for reconnect: %s", uid)
+		}
+		delete(s.pendingOfflineJobs, uid)
+	}
+
+	generation := s.clientGenerations[uid] + 1
+	s.clientGenerations[uid] = generation
+	client.generation = generation
+
 	if existingClient, ok := s.clients[uid]; ok {
 		// 关闭旧连接
 		log.Printf("Duplicate login detected, closing previous connection: %s", uid)
@@ -124,13 +145,7 @@ func (s *WebRTCSignalingServer) HandleConnection(conn *websocket.Conn, uid strin
 
 		// 在锁外关闭旧连接，避免死锁
 		go func() {
-			existingClient.conn.Close()
-			defer func() {
-				if r := recover(); r != nil {
-					log.Printf("Panic while closing previous send channel: %v", r)
-				}
-			}()
-			close(existingClient.send)
+			existingClient.close()
 		}()
 
 		s.mutex.Lock()
@@ -138,7 +153,8 @@ func (s *WebRTCSignalingServer) HandleConnection(conn *websocket.Conn, uid strin
 	s.clients[uid] = client
 	s.mutex.Unlock()
 
-	log.Printf("WebRTC client connected: %s (online: %d)", uid, s.getClientCount())
+	log.Printf("WebRTC client connected: %s (generation=%d, active=%d)",
+		uid, generation, s.getClientCount())
 
 	// 启动读写协程
 	go client.writePump()
@@ -180,11 +196,10 @@ func (s *WebRTCSignalingServer) sendRegisteredMessage(client *WebRTCClient) {
 		return
 	}
 
-	select {
-	case client.send <- data:
+	if client.trySend(data) {
 		log.Printf("Registration message sent: %s", client.uid)
-	default:
-		log.Printf("Client send buffer is full: %s", client.uid)
+	} else {
+		log.Printf("Client send buffer is full or client closed: %s", client.uid)
 		return
 	}
 
@@ -228,28 +243,64 @@ func (s *WebRTCSignalingServer) getIceServers() []IceServer {
 // removeClient 移除客户端
 func (s *WebRTCSignalingServer) removeClient(client *WebRTCClient) {
 	s.mutex.Lock()
+	shouldBroadcastClientList := false
 	// 只有当 map 中的客户端就是当前这个客户端时才删除
 	if existingClient, ok := s.clients[client.uid]; ok && existingClient == client {
+		uid := client.uid
+		generation := client.generation
 		delete(s.clients, client.uid)
-		log.Printf("WebRTC client disconnected: %s (remaining online: %d)", client.uid, len(s.clients))
+		log.Printf("WebRTC client disconnected: %s (generation=%d, active=%d). Waiting %s before offline broadcast.",
+			uid, generation, len(s.clients), offlineGracePeriod)
 
-		// 通知其他客户端该用户已下线
-		go s.notifyUserOffline(client.uid)
-
-		// 广播客户端列表
-		go s.broadcastClientList()
+		if pendingOfflineJob, ok := s.pendingOfflineJobs[uid]; ok {
+			pendingOfflineJob.Stop()
+		}
+		s.pendingOfflineJobs[uid] = time.AfterFunc(offlineGracePeriod, func() {
+			s.confirmOffline(uid, generation)
+		})
+		shouldBroadcastClientList = true
 	} else {
 		log.Printf("WebRTC client disconnected, but a newer connection is active: %s", client.uid)
 	}
 	s.mutex.Unlock()
 
-	// 安全地关闭 send channel
-	defer func() {
-		if r := recover(); r != nil {
-			log.Printf("Panic while closing send channel: %v", r)
-		}
-	}()
-	close(client.send)
+	if shouldBroadcastClientList {
+		s.broadcastClientList()
+	}
+
+	client.close()
+}
+
+// confirmOffline 在宽限期结束后确认用户仍然离线，再广播离线状态。
+func (s *WebRTCSignalingServer) confirmOffline(uid string, generation uint64) {
+	shouldNotifyOffline := false
+
+	s.mutex.Lock()
+
+	currentGeneration := s.clientGenerations[uid]
+	if currentGeneration != generation {
+		log.Printf("Skipping stale offline notification for %s: generation=%d current=%d",
+			uid, generation, currentGeneration)
+		s.mutex.Unlock()
+		return
+	}
+
+	if _, connected := s.clients[uid]; connected {
+		log.Printf("Skipping offline notification for %s: active connection restored", uid)
+		delete(s.pendingOfflineJobs, uid)
+		s.mutex.Unlock()
+		return
+	}
+
+	delete(s.pendingOfflineJobs, uid)
+	delete(s.clientGenerations, uid)
+	log.Printf("Confirmed offline after grace period: %s", uid)
+	shouldNotifyOffline = true
+	s.mutex.Unlock()
+
+	if shouldNotifyOffline {
+		s.notifyUserOffline(uid)
+	}
 }
 
 // notifyUserOffline 通知其他客户端用户已下线
@@ -276,9 +327,7 @@ func (s *WebRTCSignalingServer) notifyUserOffline(uid string) {
 
 	for clientUID, client := range s.clients {
 		if clientUID != uid {
-			select {
-			case client.send <- data:
-			default:
+			if !client.trySend(data) {
 				log.Printf("Failed to send offline notification: %s", clientUID)
 			}
 		}
@@ -302,11 +351,10 @@ func (s *WebRTCSignalingServer) relayMessage(senderUID string, msg *WebRTCMessag
 		return
 	}
 
-	select {
-	case targetClient.send <- data:
+	if targetClient.trySend(data) {
 		log.Printf("Message relayed: %s -> %s (type: %s)", senderUID, msg.To, msg.Type)
-	default:
-		log.Printf("Target client send buffer is full: %s", msg.To)
+	} else {
+		log.Printf("Target client send buffer is full or client closed: %s", msg.To)
 	}
 }
 
@@ -341,9 +389,7 @@ func (s *WebRTCSignalingServer) broadcastClientList() {
 	defer s.mutex.RUnlock()
 
 	for _, client := range s.clients {
-		select {
-		case client.send <- data:
-		default:
+		if !client.trySend(data) {
 			log.Printf("Failed to broadcast client list to: %s", client.uid)
 		}
 	}
@@ -376,10 +422,9 @@ func (s *WebRTCSignalingServer) sendClientList(client *WebRTCClient) {
 		return
 	}
 
-	select {
-	case client.send <- data:
+	if client.trySend(data) {
 		log.Printf("Client list sent: %s", client.uid)
-	default:
+	} else {
 		log.Printf("Failed to send client list: %s", client.uid)
 	}
 }
@@ -392,7 +437,6 @@ func (s *WebRTCSignalingServer) sendClientList(client *WebRTCClient) {
 func (c *WebRTCClient) readPump() {
 	defer func() {
 		c.server.removeClient(c)
-		c.conn.Close()
 	}()
 
 	c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
@@ -446,18 +490,13 @@ func (c *WebRTCClient) writePump() {
 	ticker := time.NewTicker(54 * time.Second)
 	defer func() {
 		ticker.Stop()
-		c.conn.Close()
+		c.close()
 	}()
 
 	for {
 		select {
-		case message, ok := <-c.send:
+		case message := <-c.send:
 			c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			if !ok {
-				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
-				return
-			}
-
 			if err := c.conn.WriteMessage(websocket.TextMessage, message); err != nil {
 				log.Printf("Failed to write message: %v", err)
 				return
@@ -470,4 +509,30 @@ func (c *WebRTCClient) writePump() {
 			}
 		}
 	}
+}
+
+func (c *WebRTCClient) trySend(message []byte) bool {
+	if atomic.LoadUint32(&c.closed) != 0 {
+		return false
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("Dropped message for closed client channel %s: %v", c.uid, r)
+		}
+	}()
+	select {
+	case c.send <- message:
+		return true
+	default:
+		return false
+	}
+}
+
+func (c *WebRTCClient) close() {
+	c.closeOnce.Do(func() {
+		atomic.StoreUint32(&c.closed, 1)
+		if err := c.conn.Close(); err != nil && !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+			log.Printf("Failed to close websocket connection for %s: %v", c.uid, err)
+		}
+	})
 }
