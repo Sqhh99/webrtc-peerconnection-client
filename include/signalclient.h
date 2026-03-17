@@ -2,6 +2,7 @@
 #define EXAMPLES_PEERCONNECTION_CLIENT_SIGNALCLIENT_H_
 
 #include <deque>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -98,6 +99,7 @@ class SignalClient {
   void SendAnswer(const std::string& to, const SessionDescriptionPayload& sdp);
   void SendIceCandidate(const std::string& to, const IceCandidatePayload& candidate);
   void RequestClientList();
+  void InvokeOnIoThread(std::function<void()> task);
 
  private:
   struct ParsedUrl;

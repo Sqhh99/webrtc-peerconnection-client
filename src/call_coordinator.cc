@@ -245,7 +245,8 @@ void CallCoordinator::OnIceConnectionStateChanged(
       StopIceDisconnectWatchdog();
     }
     if (ui_observer_) {
-      ui_observer_->OnLogMessage("ICE connection closed", "warning");
+      ui_observer_->OnLogMessage("ICE connection state changed to " + state_text,
+                                 "warning");
     }
   } else {
     StopIceDisconnectWatchdog();
@@ -528,13 +529,10 @@ void CallCoordinator::StartIceDisconnectWatchdog() {
             ice_disconnect_watchdog_generation_.load() != generation) {
           return;
         }
-        if (!call_manager_ || !webrtc_engine_) {
+        if (!call_manager_) {
           return;
         }
         if (call_manager_->GetCallState() != CallState::Connected) {
-          return;
-        }
-        if (!webrtc_engine_->HasPeerConnection() || webrtc_engine_->IsConnected()) {
           return;
         }
 
@@ -542,12 +540,24 @@ void CallCoordinator::StartIceDisconnectWatchdog() {
             << "ICE remained disconnected/failed for "
             << kIceDisconnectTimeoutMs
             << " ms, ending call to avoid hanging in connected state.";
-        if (ui_observer_) {
-          ui_observer_->OnLogMessage(
-              "ICE disconnected for too long. Ending the call automatically.",
-              "warning");
+        if (!signal_client_) {
+          return;
         }
-        call_manager_->EndCall();
+        std::weak_ptr<void> lifetime_guard = lifetime_guard_;
+        signal_client_->InvokeOnIoThread([this, generation, lifetime_guard]() {
+          if (lifetime_guard.expired() || shutdown_started_.load() ||
+              ice_disconnect_watchdog_generation_.load() != generation ||
+              !call_manager_ ||
+              call_manager_->GetCallState() != CallState::Connected) {
+            return;
+          }
+          if (ui_observer_) {
+            ui_observer_->OnLogMessage(
+                "ICE disconnected for too long. Ending the call automatically.",
+                "warning");
+          }
+          call_manager_->EndCall();
+        });
       });
 }
 

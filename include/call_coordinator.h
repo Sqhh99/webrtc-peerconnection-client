@@ -124,6 +124,7 @@ class CallCoordinator : public WebRTCEngineObserver,
   RtcStatsSnapshot last_stats_;
   bool has_stats_ = false;
   std::atomic<bool> shutdown_started_{false};
+  const std::shared_ptr<void> lifetime_guard_ = std::make_shared<int>(0);
   mutable std::mutex ice_disconnect_watchdog_mutex_;
   std::jthread ice_disconnect_watchdog_thread_;
   std::atomic<uint64_t> ice_disconnect_watchdog_generation_{0};

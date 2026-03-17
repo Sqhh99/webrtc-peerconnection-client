@@ -322,6 +322,23 @@ void SignalClient::RequestClientList() {
   QueueJsonMessage(message.dump());
 }
 
+void SignalClient::InvokeOnIoThread(std::function<void()> task) {
+  if (!task) {
+    return;
+  }
+
+  if (!impl_ || !impl_->io_thread.joinable() || impl_->io_context.stopped()) {
+    return;
+  }
+
+  if (impl_->io_thread.get_id() == std::this_thread::get_id()) {
+    task();
+    return;
+  }
+
+  asio::post(impl_->io_context, [task = std::move(task)]() mutable { task(); });
+}
+
 void SignalClient::EnsureIoThreadStarted() {
   if (!impl_) {
     impl_ = std::make_unique<Impl>(this);
