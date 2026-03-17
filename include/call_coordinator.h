@@ -103,6 +103,7 @@ class CallCoordinator : public WebRTCEngineObserver,
   std::string IceStateToString(webrtc::PeerConnectionInterface::IceConnectionState state) const;
   void StartIceDisconnectWatchdog();
   void StopIceDisconnectWatchdog();
+  void StopIceDisconnectWatchdogLocked();
 
   // 组件
   const webrtc::Environment env_;
@@ -123,6 +124,7 @@ class CallCoordinator : public WebRTCEngineObserver,
   RtcStatsSnapshot last_stats_;
   bool has_stats_ = false;
   std::atomic<bool> shutdown_started_{false};
+  mutable std::mutex ice_disconnect_watchdog_mutex_;
   std::jthread ice_disconnect_watchdog_thread_;
   std::atomic<uint64_t> ice_disconnect_watchdog_generation_{0};
   struct RateSample {

@@ -511,7 +511,8 @@ void CallCoordinator::OnNeedClosePeerConnection() {
 }
 
 void CallCoordinator::StartIceDisconnectWatchdog() {
-  StopIceDisconnectWatchdog();
+  std::lock_guard<std::mutex> lock(ice_disconnect_watchdog_mutex_);
+  StopIceDisconnectWatchdogLocked();
 
   const uint64_t generation = ++ice_disconnect_watchdog_generation_;
   ice_disconnect_watchdog_thread_ = std::jthread(
@@ -551,6 +552,11 @@ void CallCoordinator::StartIceDisconnectWatchdog() {
 }
 
 void CallCoordinator::StopIceDisconnectWatchdog() {
+  std::lock_guard<std::mutex> lock(ice_disconnect_watchdog_mutex_);
+  StopIceDisconnectWatchdogLocked();
+}
+
+void CallCoordinator::StopIceDisconnectWatchdogLocked() {
   ++ice_disconnect_watchdog_generation_;
   if (ice_disconnect_watchdog_thread_.joinable()) {
     ice_disconnect_watchdog_thread_.request_stop();
