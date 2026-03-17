@@ -11,22 +11,6 @@
 
 #include "signal_types.h"
 
-// 信令消息类型
-enum class SignalMessageType {
-    Register,           // 注册客户端
-    Registered,         // 注册确认
-    ClientList,         // 客户端列表
-    UserOffline,        // 用户下线
-    CallRequest,        // 呼叫请求
-    CallResponse,       // 呼叫响应
-    CallCancel,         // 取消呼叫
-    CallEnd,            // 结束通话
-    Offer,              // SDP Offer
-    Answer,             // SDP Answer
-    IceCandidate,       // ICE候选
-    Unknown
-};
-
 // 信令客户端观察者接口
 class SignalClientObserver {
  public:
@@ -99,7 +83,7 @@ class SignalClient {
   void SendAnswer(const std::string& to, const SessionDescriptionPayload& sdp);
   void SendIceCandidate(const std::string& to, const IceCandidatePayload& candidate);
   void RequestClientList();
-  void InvokeOnIoThread(std::function<void()> task);
+  bool InvokeOnIoThread(std::function<void()> task);
 
  private:
   struct ParsedUrl;
@@ -112,7 +96,6 @@ class SignalClient {
   void QueueJsonMessage(const std::string& message);
   void WriteNextMessage();
   void HandleIncomingMessage(const std::string& message);
-  SignalMessageType GetMessageType(const std::string& type_str) const;
   void AttemptReconnect();
   void CloseTransport();
   void ReportDisconnected(bool notify_observer);

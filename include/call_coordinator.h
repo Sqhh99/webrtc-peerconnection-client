@@ -2,18 +2,19 @@
 #define CALL_COORDINATOR_H_GUARD
 
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
-#include <thread>
 
 #include "api/environment/environment.h"
 #include "api/peer_connection_interface.h"
-#include "webrtcengine.h"
 
 #include "icall_observer.h"
-#include "signalclient.h"
 #include "callmanager.h"
+#include "ice_disconnect_watchdog.h"
+#include "signalclient.h"
+#include "webrtcengine.h"
 
 namespace webrtc {
 class RTCStatsReport;
@@ -101,9 +102,9 @@ class CallCoordinator : public WebRTCEngineObserver,
   void ProcessIceCandidate(const std::string& from, const IceCandidatePayload& candidate);
   void ExtractAndStoreRtcStats(const webrtc::scoped_refptr<const webrtc::RTCStatsReport>& report);
   std::string IceStateToString(webrtc::PeerConnectionInterface::IceConnectionState state) const;
+  void PostToCallControl(std::function<void()> task);
   void StartIceDisconnectWatchdog();
   void StopIceDisconnectWatchdog();
-  void StopIceDisconnectWatchdogLocked();
 
   // 组件
   const webrtc::Environment env_;
@@ -124,10 +125,7 @@ class CallCoordinator : public WebRTCEngineObserver,
   RtcStatsSnapshot last_stats_;
   bool has_stats_ = false;
   std::atomic<bool> shutdown_started_{false};
-  const std::shared_ptr<void> lifetime_guard_ = std::make_shared<int>(0);
-  mutable std::mutex ice_disconnect_watchdog_mutex_;
-  std::jthread ice_disconnect_watchdog_thread_;
-  std::atomic<uint64_t> ice_disconnect_watchdog_generation_{0};
+  IceDisconnectWatchdog ice_disconnect_watchdog_;
   struct RateSample {
     uint64_t inbound_bytes = 0;
     uint64_t outbound_bytes = 0;

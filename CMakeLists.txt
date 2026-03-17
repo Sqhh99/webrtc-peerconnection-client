@@ -34,7 +34,9 @@ add_executable(peerconnection_client
     src/defaults.cc
     src/videorenderer.cc
     src/signalclient.cc
+    src/signaling_codec.cc
     src/callmanager.cc
+    src/ice_disconnect_watchdog.cc
     src/ffmpeg_file_source.cc
     src/switchable_audio_input_win.cc
     src/test_impl.cc
@@ -48,6 +50,7 @@ add_executable(peerconnection_client
     include/call_coordinator.h
     include/callmanager.h
     include/defaults.h
+    include/ice_disconnect_watchdog.h
     include/icall_observer.h
     include/local_media_source.h
     include/managed_video_track_source.h
@@ -55,6 +58,7 @@ add_executable(peerconnection_client
     include/sdl_app.h
     include/signal_types.h
     include/signalclient.h
+    include/signaling_codec.h
     include/switchable_audio_input_win.h
     include/videorenderer.h
     include/webrtcengine.h
