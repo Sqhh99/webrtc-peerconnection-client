@@ -308,15 +308,168 @@ class WebRTCEngine::StatsCollectorCallback : public webrtc::RTCStatsCollectorCal
   std::function<void(const webrtc::scoped_refptr<const webrtc::RTCStatsReport>&)> callback_;
 };
 
+class WebRTCEngine::LocalMediaPipeline {
+ public:
+  explicit LocalMediaPipeline(const webrtc::Environment& env) : env_(env) {
+    state_ = BuildState(config_, false);
+  }
+
+  bool ValidateConfig(const LocalVideoSourceConfig& config,
+                      std::string* error_message) const {
+    if (!IsImplementedLocalVideoSourceKind(config.kind)) {
+      if (error_message) {
+        *error_message =
+            std::string(LocalVideoSourceKindToString(config.kind)) +
+            " source is not implemented yet.";
+      }
+      return false;
+    }
+
+    if (config.kind != LocalVideoSourceKind::File) {
+      return true;
+    }
+
+    if (config.file_path.empty()) {
+      if (error_message) {
+        *error_message = "A file path is required for file video source.";
+      }
+      return false;
+    }
+
+    return FfmpegFileSource::ProbeFile(config.file_path, error_message);
+  }
+
+  webrtc::scoped_refptr<ManagedVideoTrackSource> CreateSourceForConfig(
+      const LocalVideoSourceConfig& config,
+      SwitchableAudioInput* audio_input_switcher,
+      std::string* error_message) const {
+    switch (config.kind) {
+      case LocalVideoSourceKind::Camera:
+        return CapturerTrackSource::Create(env_.task_queue_factory());
+      case LocalVideoSourceKind::File:
+        return FfmpegFileSource::Create(env_, config.file_path,
+                                        audio_input_switcher, error_message);
+      default:
+        if (error_message) {
+          *error_message =
+              std::string(LocalVideoSourceKindToString(config.kind)) +
+              " source is not implemented yet.";
+        }
+        return nullptr;
+    }
+  }
+
+  LocalVideoSourceConfig GetConfig() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return config_;
+  }
+
+  LocalVideoSourceState GetState() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return state_;
+  }
+
+  void SetConfig(const LocalVideoSourceConfig& config, bool active) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    config_ = config;
+    state_ = BuildState(config_, active);
+  }
+
+  void ConfigureAudioInputForSource(const LocalVideoSourceConfig& config,
+                                    SwitchableAudioInput* audio_input_switcher) const {
+    if (!audio_input_switcher) {
+      return;
+    }
+    if (config.kind == LocalVideoSourceKind::File) {
+      audio_input_switcher->UseSyntheticPcm(48000, 2);
+      audio_input_switcher->ClearSyntheticAudio();
+      return;
+    }
+    audio_input_switcher->UseMicrophone();
+    audio_input_switcher->ClearSyntheticAudio();
+  }
+
+  void MarkInactive() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    state_ = BuildState(config_, false);
+  }
+
+ private:
+  static LocalVideoSourceState BuildState(const LocalVideoSourceConfig& config,
+                                          bool active) {
+    LocalVideoSourceState state;
+    state.kind = config.kind;
+    state.file_path = config.file_path;
+    state.display_name = GetSourceDisplayName(config);
+    state.active = active;
+    return state;
+  }
+
+  const webrtc::Environment& env_;
+  mutable std::mutex mutex_;
+  LocalVideoSourceConfig config_;
+  LocalVideoSourceState state_;
+};
+
+class WebRTCEngine::EngineTelemetry {
+ public:
+  void SetDeviceAvailability(bool audio_device_module_available,
+                             bool recording_available,
+                             bool playout_available) {
+    audio_device_module_available_.store(audio_device_module_available);
+    recording_available_.store(recording_available);
+    playout_available_.store(playout_available);
+  }
+
+  void SetLocalAudioTrackAttached(bool attached) {
+    local_audio_track_attached_.store(attached);
+  }
+
+  void SetRemoteAudioTrackAttached(bool attached) {
+    remote_audio_track_attached_.store(attached);
+  }
+
+  void Reset() {
+    SetDeviceAvailability(false, false, false);
+    SetLocalAudioTrackAttached(false);
+    SetRemoteAudioTrackAttached(false);
+  }
+
+  WebRTCEngine::AudioTransportState Snapshot(
+      const webrtc::scoped_refptr<webrtc::AudioDeviceModule>&
+          audio_device_module) const {
+    WebRTCEngine::AudioTransportState state;
+    state.audio_device_module_available =
+        audio_device_module_available_.load();
+    state.recording_available = recording_available_.load();
+    state.playout_available = playout_available_.load();
+    state.local_audio_track_attached = local_audio_track_attached_.load();
+    state.remote_audio_track_attached = remote_audio_track_attached_.load();
+    if (audio_device_module) {
+      state.recording_active = audio_device_module->Recording();
+      state.playout_active = audio_device_module->Playing();
+    }
+    return state;
+  }
+
+ private:
+  std::atomic<bool> audio_device_module_available_{false};
+  std::atomic<bool> recording_available_{false};
+  std::atomic<bool> playout_available_{false};
+  std::atomic<bool> local_audio_track_attached_{false};
+  std::atomic<bool> remote_audio_track_attached_{false};
+};
+
 // ============================================================================
 // WebRTCEngine 实现
 // ============================================================================
 
 WebRTCEngine::WebRTCEngine(const webrtc::Environment& env)
-    : env_(env), observer_(nullptr), is_creating_offer_(false) {
-  local_video_source_state_ =
-      BuildLocalVideoSourceState(local_video_source_config_, false);
-}
+    : env_(env),
+      observer_(nullptr),
+      local_media_pipeline_(std::make_unique<LocalMediaPipeline>(env)),
+      telemetry_(std::make_unique<EngineTelemetry>()),
+      is_creating_offer_(false) {}
 
 WebRTCEngine::~WebRTCEngine() {
   Shutdown();
@@ -349,57 +502,14 @@ void WebRTCEngine::ResetPeerConnectionCallbackGuard() {
 bool WebRTCEngine::ValidateLocalVideoSourceConfig(
     const LocalVideoSourceConfig& config,
     std::string* error_message) const {
-  if (!IsImplementedLocalVideoSourceKind(config.kind)) {
-    if (error_message) {
-      *error_message =
-          std::string(LocalVideoSourceKindToString(config.kind)) +
-          " source is not implemented yet.";
-    }
-    return false;
-  }
-
-  if (config.kind != LocalVideoSourceKind::File) {
-    return true;
-  }
-
-  if (config.file_path.empty()) {
-    if (error_message) {
-      *error_message = "A file path is required for file video source.";
-    }
-    return false;
-  }
-
-  return FfmpegFileSource::ProbeFile(config.file_path, error_message);
+  return local_media_pipeline_->ValidateConfig(config, error_message);
 }
 
 webrtc::scoped_refptr<ManagedVideoTrackSource>
 WebRTCEngine::CreateVideoSourceForConfig(const LocalVideoSourceConfig& config,
                                          std::string* error_message) {
-  switch (config.kind) {
-    case LocalVideoSourceKind::Camera:
-      return CapturerTrackSource::Create(env_.task_queue_factory());
-    case LocalVideoSourceKind::File:
-      return FfmpegFileSource::Create(env_, config.file_path,
-                                      audio_input_switcher_, error_message);
-    default:
-      if (error_message) {
-        *error_message =
-            std::string(LocalVideoSourceKindToString(config.kind)) +
-            " source is not implemented yet.";
-      }
-      return nullptr;
-  }
-}
-
-LocalVideoSourceState WebRTCEngine::BuildLocalVideoSourceState(
-    const LocalVideoSourceConfig& config,
-    bool active) const {
-  LocalVideoSourceState state;
-  state.kind = config.kind;
-  state.file_path = config.file_path;
-  state.display_name = GetSourceDisplayName(config);
-  state.active = active;
-  return state;
+  return local_media_pipeline_->CreateSourceForConfig(
+      config, audio_input_switcher_, error_message);
 }
 
 bool WebRTCEngine::Initialize() {
@@ -449,16 +559,17 @@ bool WebRTCEngine::Initialize() {
 
   bool recording_available = false;
   if (audio_device_module_->RecordingIsAvailable(&recording_available) == 0) {
-    recording_available_.store(recording_available);
+    // keep queried value
   }
   bool playout_available = false;
   if (audio_device_module_->PlayoutIsAvailable(&playout_available) == 0) {
-    playout_available_.store(playout_available);
+    // keep queried value
   }
-  audio_device_module_available_.store(true);
+  telemetry_->SetDeviceAvailability(true, recording_available,
+                                    playout_available);
   RTC_LOG(LS_INFO) << "Audio device module ready: recording_available="
-                   << recording_available_.load()
-                   << ", playout_available=" << playout_available_.load();
+                   << recording_available
+                   << ", playout_available=" << playout_available;
 
   deps.audio_encoder_factory = webrtc::CreateBuiltinAudioEncoderFactory();
   deps.audio_decoder_factory = webrtc::CreateBuiltinAudioDecoderFactory();
@@ -607,18 +718,14 @@ void WebRTCEngine::ClosePeerConnection() {
   remote_video_track_ = nullptr;
   video_sender_ = nullptr;
   audio_sender_ = nullptr;
-  local_audio_track_attached_.store(false);
-  remote_audio_track_attached_.store(false);
+  telemetry_->SetLocalAudioTrackAttached(false);
+  telemetry_->SetRemoteAudioTrackAttached(false);
   RTC_LOG(LS_INFO) << "Local and remote track references released";
 
   // 第五步: 释放 video_source (现在引用计数应该为0,触发析构)
   RTC_LOG(LS_INFO) << "Releasing video source";
   video_source_ = nullptr;
-  {
-    std::lock_guard<std::mutex> lock(video_source_mutex_);
-    local_video_source_state_ =
-        BuildLocalVideoSourceState(local_video_source_config_, false);
-  }
+  local_media_pipeline_->MarkInactive();
   RTC_LOG(LS_INFO) << "Video source released";
 
   // 第六步: 清理其他资源
@@ -648,21 +755,10 @@ bool WebRTCEngine::AddTracks() {
     return true;
   }
 
-  LocalVideoSourceConfig source_config;
-  {
-    std::lock_guard<std::mutex> lock(video_source_mutex_);
-    source_config = local_video_source_config_;
-  }
+  const LocalVideoSourceConfig source_config = local_media_pipeline_->GetConfig();
 
-  if (audio_input_switcher_) {
-    if (source_config.kind == LocalVideoSourceKind::File) {
-      audio_input_switcher_->UseSyntheticPcm(48000, 2);
-      audio_input_switcher_->ClearSyntheticAudio();
-    } else {
-      audio_input_switcher_->UseMicrophone();
-      audio_input_switcher_->ClearSyntheticAudio();
-    }
-  }
+  local_media_pipeline_->ConfigureAudioInputForSource(source_config,
+                                                      audio_input_switcher_);
 
   if (!has_video_sender) {
     std::string video_source_error;
@@ -693,11 +789,7 @@ bool WebRTCEngine::AddTracks() {
     }
 
     video_sender_ = video_result_or_error.value();
-    {
-      std::lock_guard<std::mutex> lock(video_source_mutex_);
-      local_video_source_state_ =
-          BuildLocalVideoSourceState(source_config, true);
-    }
+    local_media_pipeline_->SetConfig(source_config, true);
     if (observer_) {
       observer_->OnLocalVideoTrackAdded(local_video_track_.get());
     }
@@ -722,7 +814,7 @@ bool WebRTCEngine::AddTracks() {
     }
 
     audio_sender_ = result_or_error.value();
-    local_audio_track_attached_.store(true);
+    telemetry_->SetLocalAudioTrackAttached(true);
     RTC_LOG(LS_INFO) << "Local audio track added successfully";
   }
 
@@ -1031,9 +1123,7 @@ bool WebRTCEngine::SetLocalVideoSource(const LocalVideoSourceConfig& config,
   }
 
   if (!peer_connection_ || !peer_connection_factory_ || !video_sender_) {
-    std::lock_guard<std::mutex> lock(video_source_mutex_);
-    local_video_source_config_ = config;
-    local_video_source_state_ = BuildLocalVideoSourceState(config, false);
+    local_media_pipeline_->SetConfig(config, false);
     return true;
   }
 
@@ -1055,25 +1145,14 @@ bool WebRTCEngine::SetLocalVideoSource(const LocalVideoSourceConfig& config,
     return false;
   }
 
-  if (audio_input_switcher_) {
-    if (config.kind == LocalVideoSourceKind::File) {
-      audio_input_switcher_->UseSyntheticPcm(48000, 2);
-      audio_input_switcher_->ClearSyntheticAudio();
-    } else {
-      audio_input_switcher_->UseMicrophone();
-      audio_input_switcher_->ClearSyntheticAudio();
-    }
-  }
+  local_media_pipeline_->ConfigureAudioInputForSource(config,
+                                                      audio_input_switcher_);
 
   auto previous_source = video_source_;
   auto previous_track = local_video_track_;
-  {
-    std::lock_guard<std::mutex> lock(video_source_mutex_);
-    local_video_source_config_ = config;
-    local_video_source_state_ = BuildLocalVideoSourceState(config, true);
-    video_source_ = new_source;
-    local_video_track_ = new_track;
-  }
+  video_source_ = new_source;
+  local_video_track_ = new_track;
+  local_media_pipeline_->SetConfig(config, true);
 
   if (previous_track) {
     previous_track->set_enabled(false);
@@ -1088,8 +1167,7 @@ bool WebRTCEngine::SetLocalVideoSource(const LocalVideoSourceConfig& config,
 }
 
 LocalVideoSourceState WebRTCEngine::GetLocalVideoSourceState() const {
-  std::lock_guard<std::mutex> lock(video_source_mutex_);
-  return local_video_source_state_;
+  return local_media_pipeline_->GetState();
 }
 
 void WebRTCEngine::Shutdown() {
@@ -1106,11 +1184,7 @@ void WebRTCEngine::Shutdown() {
   audio_device_module_ = nullptr;
   audio_input_switcher_ = nullptr;
   com_initializer_.reset();
-  audio_device_module_available_.store(false);
-  recording_available_.store(false);
-  playout_available_.store(false);
-  local_audio_track_attached_.store(false);
-  remote_audio_track_attached_.store(false);
+  telemetry_->Reset();
 
   // 停止信令线程
   if (signaling_thread_) {
@@ -1119,27 +1193,13 @@ void WebRTCEngine::Shutdown() {
   }
   pc_observer_.reset();
 
-  {
-    std::lock_guard<std::mutex> lock(video_source_mutex_);
-    local_video_source_state_ =
-        BuildLocalVideoSourceState(local_video_source_config_, false);
-  }
+  local_media_pipeline_->MarkInactive();
 
   RTC_LOG(LS_INFO) << "WebRTC Engine shutdown complete";
 }
 
 WebRTCEngine::AudioTransportState WebRTCEngine::GetAudioTransportState() const {
-  AudioTransportState state;
-  state.audio_device_module_available = audio_device_module_available_.load();
-  state.recording_available = recording_available_.load();
-  state.playout_available = playout_available_.load();
-  state.local_audio_track_attached = local_audio_track_attached_.load();
-  state.remote_audio_track_attached = remote_audio_track_attached_.load();
-  if (audio_device_module_) {
-    state.recording_active = audio_device_module_->Recording();
-    state.playout_active = audio_device_module_->Playing();
-  }
-  return state;
+  return telemetry_->Snapshot(audio_device_module_);
 }
 
 // ============================================================================
@@ -1172,7 +1232,7 @@ void WebRTCEngine::OnPeerConnectionTrack(
     PublishRemoteVideoTrack(
         static_cast<webrtc::VideoTrackInterface*>(track.get()), "on-track");
   } else if (track->kind() == webrtc::MediaStreamTrackInterface::kAudioKind) {
-    remote_audio_track_attached_.store(true);
+    telemetry_->SetRemoteAudioTrackAttached(true);
     RTC_LOG(LS_INFO) << "Remote audio track attached via on-track: "
                      << track->id();
   }
@@ -1192,7 +1252,7 @@ void WebRTCEngine::OnPeerConnectionAddTrack(webrtc::RtpReceiverInterface* receiv
     PublishRemoteVideoTrack(static_cast<webrtc::VideoTrackInterface*>(track),
                             "on-add-track");
   } else if (track->kind() == webrtc::MediaStreamTrackInterface::kAudioKind) {
-    remote_audio_track_attached_.store(true);
+    telemetry_->SetRemoteAudioTrackAttached(true);
     RTC_LOG(LS_INFO) << "Remote audio track added";
   }
 }
@@ -1213,7 +1273,7 @@ void WebRTCEngine::OnPeerConnectionRemoveTrack(webrtc::RtpReceiverInterface* rec
       observer_->OnRemoteVideoTrackRemoved();
     }
   } else if (track->kind() == webrtc::MediaStreamTrackInterface::kAudioKind) {
-    remote_audio_track_attached_.store(false);
+    telemetry_->SetRemoteAudioTrackAttached(false);
     RTC_LOG(LS_INFO) << "Remote audio track removed";
   }
 }

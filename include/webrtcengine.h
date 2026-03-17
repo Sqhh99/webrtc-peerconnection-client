@@ -103,6 +103,8 @@ class WebRTCEngine {
 
  private:
   // 内部观察者类声明
+  class LocalMediaPipeline;
+  class EngineTelemetry;
   class PeerConnectionObserverImpl;
   class CreateSessionDescriptionObserverImpl;
   class StatsCollectorCallback;
@@ -128,9 +130,6 @@ class WebRTCEngine {
   webrtc::scoped_refptr<ManagedVideoTrackSource> CreateVideoSourceForConfig(
       const LocalVideoSourceConfig& config,
       std::string* error_message);
-  LocalVideoSourceState BuildLocalVideoSourceState(
-      const LocalVideoSourceConfig& config,
-      bool active) const;
 
   const webrtc::Environment env_;
   std::unique_ptr<webrtc::Thread> signaling_thread_;
@@ -155,18 +154,12 @@ class WebRTCEngine {
   std::deque<webrtc::IceCandidate*> pending_ice_candidates_;
   std::vector<IceServerConfig> ice_servers_;  // ICE 服务器配置
 
+  std::unique_ptr<LocalMediaPipeline> local_media_pipeline_;
+  std::unique_ptr<EngineTelemetry> telemetry_;
   mutable std::mutex callback_guard_mutex_;
   std::shared_ptr<void> peer_connection_callback_guard_;
-  mutable std::mutex video_source_mutex_;
-  LocalVideoSourceConfig local_video_source_config_;
-  LocalVideoSourceState local_video_source_state_;
   bool is_creating_offer_;
   std::atomic<bool> shutdown_started_{false};
-  std::atomic<bool> audio_device_module_available_{false};
-  std::atomic<bool> recording_available_{false};
-  std::atomic<bool> playout_available_{false};
-  std::atomic<bool> local_audio_track_attached_{false};
-  std::atomic<bool> remote_audio_track_attached_{false};
 };
 
 #endif  // WEBRTCENGINE_H_GUARD
