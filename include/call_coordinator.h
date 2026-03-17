@@ -5,6 +5,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 
 #include "api/environment/environment.h"
 #include "api/peer_connection_interface.h"
@@ -100,6 +101,8 @@ class CallCoordinator : public WebRTCEngineObserver,
   void ProcessIceCandidate(const std::string& from, const IceCandidatePayload& candidate);
   void ExtractAndStoreRtcStats(const webrtc::scoped_refptr<const webrtc::RTCStatsReport>& report);
   std::string IceStateToString(webrtc::PeerConnectionInterface::IceConnectionState state) const;
+  void StartIceDisconnectWatchdog();
+  void StopIceDisconnectWatchdog();
 
   // 组件
   const webrtc::Environment env_;
@@ -120,6 +123,8 @@ class CallCoordinator : public WebRTCEngineObserver,
   RtcStatsSnapshot last_stats_;
   bool has_stats_ = false;
   std::atomic<bool> shutdown_started_{false};
+  std::jthread ice_disconnect_watchdog_thread_;
+  std::atomic<uint64_t> ice_disconnect_watchdog_generation_{0};
   struct RateSample {
     uint64_t inbound_bytes = 0;
     uint64_t outbound_bytes = 0;
@@ -127,6 +132,7 @@ class CallCoordinator : public WebRTCEngineObserver,
     bool valid = false;
   };
   RateSample last_rate_sample_;
+  static constexpr int kIceDisconnectTimeoutMs = 10000;
 };
 
 #endif  // CALL_COORDINATOR_H_GUARD

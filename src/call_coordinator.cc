@@ -1,5 +1,6 @@
 #include "call_coordinator.h"
 
+#include <chrono>
 #include <filesystem>
 #include <utility>
 
@@ -42,6 +43,8 @@ void CallCoordinator::Shutdown() {
   if (shutdown_started_.exchange(true)) {
     return;
   }
+
+  StopIceDisconnectWatchdog();
 
   ui_observer_ = nullptr;
   if (call_manager_) {
@@ -227,15 +230,25 @@ void CallCoordinator::OnIceConnectionStateChanged(
 
   if (state == webrtc::PeerConnectionInterface::kIceConnectionConnected ||
       state == webrtc::PeerConnectionInterface::kIceConnectionCompleted) {
+    StopIceDisconnectWatchdog();
     if (call_manager_) {
       call_manager_->NotifyPeerConnectionEstablished();
     }
   } else if (state == webrtc::PeerConnectionInterface::kIceConnectionFailed ||
              state == webrtc::PeerConnectionInterface::kIceConnectionDisconnected ||
              state == webrtc::PeerConnectionInterface::kIceConnectionClosed) {
+    const bool should_watch =
+        call_manager_ && call_manager_->GetCallState() == CallState::Connected;
+    if (should_watch) {
+      StartIceDisconnectWatchdog();
+    } else {
+      StopIceDisconnectWatchdog();
+    }
     if (ui_observer_) {
       ui_observer_->OnLogMessage("ICE connection closed", "warning");
     }
+  } else {
+    StopIceDisconnectWatchdog();
   }
 }
 
@@ -395,6 +408,9 @@ void CallCoordinator::OnCallStateChanged(CallState state,
   if (state == CallState::Idle) {
     current_peer_id_.clear();
   }
+  if (state != CallState::Connected) {
+    StopIceDisconnectWatchdog();
+  }
   if (ui_observer_) {
     ui_observer_->OnCallStateChanged(state, peer_id);
   }
@@ -455,6 +471,8 @@ void CallCoordinator::OnCallTimeout() {
 
 void CallCoordinator::OnNeedCreatePeerConnection(const std::string& peer_id,
                                                  bool is_caller) {
+  StopIceDisconnectWatchdog();
+
   current_peer_id_ = peer_id;
   is_caller_ = is_caller;
 
@@ -482,12 +500,66 @@ void CallCoordinator::OnNeedCreatePeerConnection(const std::string& peer_id,
 }
 
 void CallCoordinator::OnNeedClosePeerConnection() {
+  StopIceDisconnectWatchdog();
   if (ui_observer_) {
     ui_observer_->OnStopLocalRenderer();
     ui_observer_->OnStopRemoteRenderer();
   }
   if (webrtc_engine_) {
     webrtc_engine_->ClosePeerConnection();
+  }
+}
+
+void CallCoordinator::StartIceDisconnectWatchdog() {
+  StopIceDisconnectWatchdog();
+
+  const uint64_t generation = ++ice_disconnect_watchdog_generation_;
+  ice_disconnect_watchdog_thread_ = std::jthread(
+      [this, generation](std::stop_token stop_token) {
+        const auto deadline =
+            std::chrono::steady_clock::now() +
+            std::chrono::milliseconds(kIceDisconnectTimeoutMs);
+        while (!stop_token.stop_requested() &&
+               std::chrono::steady_clock::now() < deadline) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        if (stop_token.stop_requested() ||
+            ice_disconnect_watchdog_generation_.load() != generation) {
+          return;
+        }
+        if (!call_manager_ || !webrtc_engine_) {
+          return;
+        }
+        if (call_manager_->GetCallState() != CallState::Connected) {
+          return;
+        }
+        if (!webrtc_engine_->HasPeerConnection() || webrtc_engine_->IsConnected()) {
+          return;
+        }
+
+        RTC_LOG(LS_WARNING)
+            << "ICE remained disconnected/failed for "
+            << kIceDisconnectTimeoutMs
+            << " ms, ending call to avoid hanging in connected state.";
+        if (ui_observer_) {
+          ui_observer_->OnLogMessage(
+              "ICE disconnected for too long. Ending the call automatically.",
+              "warning");
+        }
+        call_manager_->EndCall();
+      });
+}
+
+void CallCoordinator::StopIceDisconnectWatchdog() {
+  ++ice_disconnect_watchdog_generation_;
+  if (ice_disconnect_watchdog_thread_.joinable()) {
+    ice_disconnect_watchdog_thread_.request_stop();
+    if (ice_disconnect_watchdog_thread_.get_id() ==
+        std::this_thread::get_id()) {
+      ice_disconnect_watchdog_thread_.detach();
+    } else {
+      ice_disconnect_watchdog_thread_.join();
+    }
   }
 }
 

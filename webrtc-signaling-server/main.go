@@ -259,15 +259,17 @@ func (s *WebRTCSignalingServer) removeClient(client *WebRTCClient) {
 	s.mutex.Lock()
 	// 只有当 map 中的客户端就是当前这个客户端时才删除
 	if existingClient, ok := s.clients[client.uid]; ok && existingClient == client {
+		uid := client.uid
+		generation := client.generation
 		delete(s.clients, client.uid)
 		log.Printf("WebRTC client disconnected: %s (generation=%d, active=%d). Waiting %s before offline broadcast.",
-			client.uid, client.generation, len(s.clients), kOfflineGracePeriod)
+			uid, generation, len(s.clients), kOfflineGracePeriod)
 
-		if pendingOfflineJob, ok := s.pendingOfflineJobs[client.uid]; ok {
+		if pendingOfflineJob, ok := s.pendingOfflineJobs[uid]; ok {
 			pendingOfflineJob.Stop()
 		}
-		s.pendingOfflineJobs[client.uid] = time.AfterFunc(kOfflineGracePeriod, func() {
-			s.confirmOffline(client.uid, client.generation)
+		s.pendingOfflineJobs[uid] = time.AfterFunc(kOfflineGracePeriod, func() {
+			s.confirmOffline(uid, generation)
 		})
 	} else {
 		log.Printf("WebRTC client disconnected, but a newer connection is active: %s", client.uid)
@@ -285,33 +287,41 @@ func (s *WebRTCSignalingServer) removeClient(client *WebRTCClient) {
 
 // confirmOffline 在宽限期结束后确认用户仍然离线，再广播离线状态。
 func (s *WebRTCSignalingServer) confirmOffline(uid string, generation uint64) {
+	shouldBroadcastOffline := false
+
 	s.mutex.Lock()
-	defer s.mutex.Unlock()
 
 	currentGeneration := s.clientGenerations[uid]
 	if currentGeneration != generation {
 		log.Printf("Skipping stale offline notification for %s: generation=%d current=%d",
 			uid, generation, currentGeneration)
+		s.mutex.Unlock()
 		return
 	}
 
 	if _, connected := s.clients[uid]; connected {
 		log.Printf("Skipping offline notification for %s: active connection restored", uid)
 		delete(s.pendingOfflineJobs, uid)
+		s.mutex.Unlock()
 		return
 	}
 
 	if _, visible := s.visibleClients[uid]; !visible {
 		delete(s.pendingOfflineJobs, uid)
+		s.mutex.Unlock()
 		return
 	}
 
 	delete(s.visibleClients, uid)
 	delete(s.pendingOfflineJobs, uid)
 	log.Printf("Confirmed offline after grace period: %s", uid)
+	shouldBroadcastOffline = true
+	s.mutex.Unlock()
 
-	go s.notifyUserOffline(uid)
-	go s.broadcastClientList()
+	if shouldBroadcastOffline {
+		s.notifyUserOffline(uid)
+		s.broadcastClientList()
+	}
 }
 
 // notifyUserOffline 通知其他客户端用户已下线

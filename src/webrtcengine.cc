@@ -202,11 +202,9 @@ class CapturerTrackSource : public ManagedVideoTrackSource {
 // PeerConnectionObserver的内部实现
 class WebRTCEngine::PeerConnectionObserverImpl : public webrtc::PeerConnectionObserver {
  public:
-  explicit PeerConnectionObserverImpl(WebRTCEngine* engine) : engine_(engine) {}
-
-  void SetCallbackGuard(std::weak_ptr<void> callback_guard) {
-    callback_guard_ = std::move(callback_guard);
-  }
+  explicit PeerConnectionObserverImpl(WebRTCEngine* engine,
+                                      std::weak_ptr<void> callback_guard)
+      : engine_(engine), callback_guard_(std::move(callback_guard)) {}
 
   void OnSignalingChange(webrtc::PeerConnectionInterface::SignalingState new_state) override {}
   void OnTrack(
@@ -536,11 +534,9 @@ bool WebRTCEngine::CreatePeerConnection() {
 
   RenewPeerConnectionCallbackGuard();
 
-  // 创建并保存内部观察者 - 必须保持存活!
-  if (!pc_observer_) {
-    pc_observer_ = std::make_unique<PeerConnectionObserverImpl>(this);
-  }
-  pc_observer_->SetCallbackGuard(GetPeerConnectionCallbackGuard());
+  // 每个 PeerConnection 使用独立 observer，避免并发修改 observer 内部状态。
+  pc_observer_ = std::make_unique<PeerConnectionObserverImpl>(
+      this, GetPeerConnectionCallbackGuard());
   webrtc::PeerConnectionDependencies pc_dependencies(pc_observer_.get());
   auto error_or_peer_connection =
       peer_connection_factory_->CreatePeerConnectionOrError(
@@ -554,9 +550,7 @@ bool WebRTCEngine::CreatePeerConnection() {
     RTC_LOG(LS_ERROR) << "CreatePeerConnection failed: "
                       << error_or_peer_connection.error().message();
     ResetPeerConnectionCallbackGuard();
-    if (pc_observer_) {
-      pc_observer_->SetCallbackGuard({});
-    }
+    pc_observer_.reset();
     if (observer_) {
       observer_->OnError(error_or_peer_connection.error().message());
     }
@@ -566,9 +560,6 @@ bool WebRTCEngine::CreatePeerConnection() {
 
 void WebRTCEngine::ClosePeerConnection() {
   ResetPeerConnectionCallbackGuard();
-  if (pc_observer_) {
-    pc_observer_->SetCallbackGuard({});
-  }
 
   RTC_LOG(LS_INFO) << "Closing peer connection...";
 
@@ -635,7 +626,10 @@ void WebRTCEngine::ClosePeerConnection() {
     delete candidate;
   }
   pending_ice_candidates_.clear();
-  
+
+  // 每次关闭后释放当前 observer，下一次创建新的 observer。
+  pc_observer_.reset();
+
   RTC_LOG(LS_INFO) << "Peer connection closed successfully";
 }
 
