@@ -17,6 +17,7 @@
 #include <boost/beast/core/tcp_stream.hpp>
 #include <boost/beast/websocket.hpp>
 
+#include "signal_message_dispatcher.h"
 #include "signaling_codec.h"
 
 namespace {
@@ -378,14 +379,6 @@ void SignalClient::WriteNextMessage() {
 }
 
 void SignalClient::HandleIncomingMessage(const std::string& message) {
-  ParsedSignalingMessage parsed;
-  std::string parse_error;
-  if (!ParseSignalingMessage(message, &parsed, &parse_error)) {
-    ReportConnectionError(parse_error.empty() ? "Failed to parse signaling message."
-                                              : parse_error);
-    return;
-  }
-
   SignalClientObserver* observer = nullptr;
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
@@ -395,46 +388,21 @@ void SignalClient::HandleIncomingMessage(const std::string& message) {
     return;
   }
 
-  switch (parsed.type) {
-    case SignalingMessageType::Registered: {
-      {
-        std::lock_guard<std::mutex> lock(state_mutex_);
-        ice_servers_ = parsed.ice_servers;
-      }
-      observer->OnIceServersReceived(parsed.ice_servers);
-      RequestClientList();
-      break;
+  const SignalMessageDispatchOutcome outcome =
+      DispatchSignalingMessage(message, observer);
+  if (!outcome.success) {
+    ReportConnectionError(outcome.error);
+    return;
+  }
+
+  if (outcome.has_ice_servers) {
+    {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      ice_servers_ = outcome.ice_servers;
     }
-    case SignalingMessageType::ClientList:
-      observer->OnClientListUpdate(parsed.clients);
-      break;
-    case SignalingMessageType::UserOffline:
-      observer->OnUserOffline(parsed.offline_client_id);
-      break;
-    case SignalingMessageType::CallRequest:
-      observer->OnCallRequest(parsed.from, parsed.call_id);
-      break;
-    case SignalingMessageType::CallResponse:
-      observer->OnCallResponse(parsed.from, parsed.call_id, parsed.accepted,
-                               parsed.reason);
-      break;
-    case SignalingMessageType::CallCancel:
-      observer->OnCallCancel(parsed.from, parsed.call_id, parsed.reason);
-      break;
-    case SignalingMessageType::CallEnd:
-      observer->OnCallEnd(parsed.from, parsed.call_id, parsed.reason);
-      break;
-    case SignalingMessageType::Offer:
-      observer->OnOffer(parsed.from, parsed.session_description);
-      break;
-    case SignalingMessageType::Answer:
-      observer->OnAnswer(parsed.from, parsed.session_description);
-      break;
-    case SignalingMessageType::IceCandidate:
-      observer->OnIceCandidate(parsed.from, parsed.ice_candidate);
-      break;
-    default:
-      break;
+  }
+  if (outcome.request_client_list) {
+    RequestClientList();
   }
 }
 

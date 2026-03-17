@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(peerconnection_client LANGUAGES CXX)
+include(CTest)
 
 if(NOT WIN32)
     message(FATAL_ERROR "peerconnection_client currently supports Windows only.")
@@ -30,6 +31,7 @@ add_executable(peerconnection_client
     src/main.cc
     src/sdl_app.cc
     src/call_coordinator.cc
+    src/call_coordinator_ports.cc
     src/webrtcengine.cc
     src/webrtcengine_peer_connection.cc
     src/webrtcengine_media_pipeline.cc
@@ -38,6 +40,7 @@ add_executable(peerconnection_client
     src/videorenderer.cc
     src/signalclient.cc
     src/signaling_codec.cc
+    src/signal_message_dispatcher.cc
     src/callmanager.cc
     src/ice_disconnect_watchdog.cc
     src/ffmpeg_file_source.cc
@@ -51,8 +54,10 @@ add_executable(peerconnection_client
     test/frame_utils.cc
     include/app_config.h
     include/call_coordinator.h
+    include/call_coordinator_ports.h
     include/callmanager.h
     include/defaults.h
+    include/call_signaling_transport.h
     include/ice_disconnect_watchdog.h
     include/icall_observer.h
     include/local_media_source.h
@@ -61,6 +66,7 @@ add_executable(peerconnection_client
     include/sdl_app.h
     include/signal_types.h
     include/signalclient.h
+    include/signal_message_dispatcher.h
     include/signaling_codec.h
     include/switchable_audio_input_win.h
     include/videorenderer.h
@@ -136,6 +142,11 @@ target_link_libraries(
         SDL3::SDL3
         ${SYSTEM_LIBRARIES}
 )
+
+if(BUILD_TESTING)
+    find_package(GTest CONFIG REQUIRED)
+    add_subdirectory(tests)
+endif()
 
 foreach(FFMPEG_RUNTIME_DLL IN LISTS FFMPEG_RUNTIME_DLLS)
     add_custom_command(

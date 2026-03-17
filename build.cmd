@@ -4,8 +4,15 @@ setlocal enableextensions enabledelayedexpansion
 for %%I in ("%~dp0.") do set "ROOT_DIR=%%~fI"
 set "BUILD_ROOT=%ROOT_DIR%\build"
 
+set "MODE=build"
+set "FIRST_ARG=%~1"
+if /I "%FIRST_ARG%"=="clean" goto clean_build
+if /I "%FIRST_ARG%"=="test" (
+    set "MODE=test"
+    shift
+)
+
 set "CONFIG_NAME=%~1"
-if /I "%CONFIG_NAME%"=="clean" goto clean_build
 if "%CONFIG_NAME%"=="" set "CONFIG_NAME=release"
 
 if /I "%CONFIG_NAME%"=="release" (
@@ -13,11 +20,15 @@ if /I "%CONFIG_NAME%"=="release" (
 ) else if /I "%CONFIG_NAME%"=="debug" (
     set "BUILD_TYPE=Debug"
 ) else (
-    echo Usage: %~nx0 [clean^|release^|debug] [additional CMake configure args...]
+    if /I "%MODE%"=="test" (
+        echo Usage: %~nx0 test [release^|debug]
+    ) else (
+        echo Usage: %~nx0 [clean^|release^|debug] [additional CMake configure args...]
+    )
     exit /b 1
 )
 
-shift
+if not "%~1"=="" shift
 
 set "EXTRA_CMAKE_ARGS="
 :collect_extra_args
@@ -83,6 +94,14 @@ call cmake --build "%BUILD_DIR%" --config %BUILD_TYPE%
 if errorlevel 1 exit /b 1
 
 call :copy_compile_commands
+if errorlevel 1 exit /b 1
+
+if /I "%MODE%"=="test" (
+    echo [build.cmd] Running tests from %BUILD_DIR% ...
+    call ctest --test-dir "%BUILD_DIR%" --output-on-failure --verbose
+    if errorlevel 1 exit /b 1
+)
+
 exit /b %errorlevel%
 
 :clean_build

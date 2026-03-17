@@ -5,6 +5,7 @@
     "boost-asio",
     "boost-beast",
     "boost-system",
+    "gtest",
     "nlohmann-json",
     "sdl3",
     {

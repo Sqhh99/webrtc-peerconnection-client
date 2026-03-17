@@ -10,9 +10,9 @@
 #include "api/environment/environment.h"
 #include "api/peer_connection_interface.h"
 
+#include "call_coordinator_ports.h"
 #include "icall_observer.h"
 #include "callmanager.h"
-#include "ice_disconnect_watchdog.h"
 #include "signalclient.h"
 #include "webrtcengine.h"
 
@@ -29,6 +29,12 @@ class CallCoordinator : public WebRTCEngineObserver,
                         public ICallController {
  public:
   explicit CallCoordinator(const webrtc::Environment& env);
+  CallCoordinator(
+      const webrtc::Environment& env,
+      std::unique_ptr<IWebRTCEnginePort> webrtc_engine,
+      std::unique_ptr<ISignalClientPort> signal_client,
+      std::unique_ptr<ICallManagerPort> call_manager,
+      std::unique_ptr<IIceDisconnectWatchdogPort> ice_disconnect_watchdog);
   ~CallCoordinator();
   
   // 设置UI观察者
@@ -108,9 +114,9 @@ class CallCoordinator : public WebRTCEngineObserver,
 
   // 组件
   const webrtc::Environment env_;
-  std::unique_ptr<WebRTCEngine> webrtc_engine_;
-  std::unique_ptr<SignalClient> signal_client_;
-  std::unique_ptr<CallManager> call_manager_;
+  std::unique_ptr<IWebRTCEnginePort> webrtc_engine_;
+  std::unique_ptr<ISignalClientPort> signal_client_;
+  std::unique_ptr<ICallManagerPort> call_manager_;
   
   // 观察者
   ICallUIObserver* ui_observer_;
@@ -125,7 +131,7 @@ class CallCoordinator : public WebRTCEngineObserver,
   RtcStatsSnapshot last_stats_;
   bool has_stats_ = false;
   std::atomic<bool> shutdown_started_{false};
-  IceDisconnectWatchdog ice_disconnect_watchdog_;
+  std::unique_ptr<IIceDisconnectWatchdogPort> ice_disconnect_watchdog_;
   struct RateSample {
     uint64_t inbound_bytes = 0;
     uint64_t outbound_bytes = 0;

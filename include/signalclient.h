@@ -9,6 +9,7 @@
 #include <thread>
 #include <vector>
 
+#include "call_signaling_transport.h"
 #include "signal_types.h"
 
 // 信令客户端观察者接口
@@ -48,7 +49,7 @@ class SignalClientObserver {
 };
 
 // WebSocket信令客户端
-class SignalClient {
+class SignalClient : public CallSignalingTransport {
  public:
   SignalClient();
   ~SignalClient();
@@ -56,7 +57,7 @@ class SignalClient {
   // 连接到信令服务器
   void Connect(const std::string& server_url, const std::string& client_id = "");
   void Disconnect();
-  bool IsConnected() const;
+  bool IsConnected() const override;
 
   // 获取客户端ID
   std::string GetClientId() const;
@@ -68,17 +69,18 @@ class SignalClient {
   void RegisterObserver(SignalClientObserver* observer);
 
   // 发送消息
-  void SendCallRequest(const std::string& to, const std::string& call_id);
+  void SendCallRequest(const std::string& to,
+                       const std::string& call_id) override;
   void SendCallResponse(const std::string& to,
                         const std::string& call_id,
                         bool accepted,
-                        const std::string& reason = "");
+                        const std::string& reason = "") override;
   void SendCallCancel(const std::string& to,
                       const std::string& call_id,
-                      const std::string& reason = "");
+                      const std::string& reason = "") override;
   void SendCallEnd(const std::string& to,
                    const std::string& call_id,
-                   const std::string& reason = "");
+                   const std::string& reason = "") override;
   void SendOffer(const std::string& to, const SessionDescriptionPayload& sdp);
   void SendAnswer(const std::string& to, const SessionDescriptionPayload& sdp);
   void SendIceCandidate(const std::string& to, const IceCandidatePayload& candidate);

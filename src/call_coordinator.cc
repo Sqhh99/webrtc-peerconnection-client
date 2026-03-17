@@ -7,19 +7,26 @@
 #include "api/stats/rtcstats_objects.h"
 #include "rtc_base/logging.h"
 
-CallCoordinator::CallCoordinator(const webrtc::Environment& env)
+CallCoordinator::CallCoordinator(
+    const webrtc::Environment& env,
+    std::unique_ptr<IWebRTCEnginePort> webrtc_engine,
+    std::unique_ptr<ISignalClientPort> signal_client,
+    std::unique_ptr<ICallManagerPort> call_manager,
+    std::unique_ptr<IIceDisconnectWatchdogPort> ice_disconnect_watchdog)
     : env_(env),
+      webrtc_engine_(std::move(webrtc_engine)),
+      signal_client_(std::move(signal_client)),
+      call_manager_(std::move(call_manager)),
       ui_observer_(nullptr),
       is_caller_(false),
       last_ice_state_("Not connected"),
-      ice_disconnect_watchdog_(
-          std::chrono::milliseconds(kIceDisconnectTimeoutMs)) {
-  webrtc_engine_ = std::make_unique<WebRTCEngine>(env);
-  webrtc_engine_->SetObserver(this);
-
-  signal_client_ = std::make_unique<SignalClient>();
-  call_manager_ = std::make_unique<CallManager>();
-  call_manager_->SetSignalClient(signal_client_.get());
+      ice_disconnect_watchdog_(std::move(ice_disconnect_watchdog)) {
+  if (webrtc_engine_) {
+    webrtc_engine_->SetObserver(this);
+  }
+  if (call_manager_ && signal_client_) {
+    call_manager_->SetSignalTransport(signal_client_.get());
+  }
 
   last_stats_.ice_state = last_ice_state_;
   last_stats_.valid = false;
@@ -36,6 +43,9 @@ void CallCoordinator::SetUIObserver(ICallUIObserver* ui_observer) {
 }
 
 bool CallCoordinator::Initialize() {
+  if (!signal_client_ || !call_manager_ || !webrtc_engine_) {
+    return false;
+  }
   signal_client_->RegisterObserver(this);
   call_manager_->RegisterObserver(this);
   return webrtc_engine_->Initialize();
@@ -177,7 +187,7 @@ RtcStatsSnapshot CallCoordinator::GetLatestRtcStats() {
         });
   }
 
-  WebRTCEngine::AudioTransportState audio_state;
+  IWebRTCEnginePort::AudioTransportState audio_state;
   if (webrtc_engine_) {
     audio_state = webrtc_engine_->GetAudioTransportState();
   }
@@ -548,7 +558,10 @@ void CallCoordinator::OnNeedClosePeerConnection() {
 }
 
 void CallCoordinator::StartIceDisconnectWatchdog() {
-  ice_disconnect_watchdog_.Arm([this]() {
+  if (!ice_disconnect_watchdog_) {
+    return;
+  }
+  ice_disconnect_watchdog_->Arm([this]() {
     RTC_LOG(LS_WARNING) << "ICE remained unstable for " << kIceDisconnectTimeoutMs
                         << " ms, scheduling automatic hangup.";
     PostToCallControl([this]() {
@@ -567,7 +580,9 @@ void CallCoordinator::StartIceDisconnectWatchdog() {
 }
 
 void CallCoordinator::StopIceDisconnectWatchdog() {
-  ice_disconnect_watchdog_.Disarm();
+  if (ice_disconnect_watchdog_) {
+    ice_disconnect_watchdog_->Disarm();
+  }
 }
 
 void CallCoordinator::ProcessOffer(const std::string& from,

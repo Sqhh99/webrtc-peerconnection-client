@@ -29,6 +29,8 @@ Use the batch script from a normal Windows shell or Developer Command Prompt.
 build.cmd clean
 build.cmd
 build.cmd debug
+build.cmd test
+build.cmd test debug
 ```
 
 Notes:
@@ -37,6 +39,7 @@ Notes:
 - build output lives under `build\release` or `build\debug`
 - `build.cmd clean` removes the whole `build\` directory
 - `build\compile_commands.json` is synchronized from the active config directory after configure/build
+- `build.cmd test` builds then runs `ctest --verbose` automatically for the selected config, showing each test case
 
 ## CMake preset
 
@@ -45,6 +48,14 @@ This repository also provides a default Ninja preset:
 ```bat
 cmake --preset default
 cmake --build --preset default
+```
+
+To run tests manually after build:
+
+```bat
+ctest --test-dir build\release --output-on-failure
+ctest --test-dir build\release -N
+ctest --test-dir build\release -V
 ```
 
 ## Signaling server
