@@ -558,15 +558,23 @@ void CallCoordinator::StopIceDisconnectWatchdog() {
 
 void CallCoordinator::StopIceDisconnectWatchdogLocked() {
   ++ice_disconnect_watchdog_generation_;
-  if (ice_disconnect_watchdog_thread_.joinable()) {
-    ice_disconnect_watchdog_thread_.request_stop();
-    if (ice_disconnect_watchdog_thread_.get_id() ==
-        std::this_thread::get_id()) {
-      ice_disconnect_watchdog_thread_.detach();
-    } else {
-      ice_disconnect_watchdog_thread_.join();
-    }
+  if (!ice_disconnect_watchdog_thread_.joinable()) {
+    return;
   }
+
+  ice_disconnect_watchdog_thread_.request_stop();
+  if (ice_disconnect_watchdog_thread_.get_id() == std::this_thread::get_id()) {
+    std::jthread self_thread = std::move(ice_disconnect_watchdog_thread_);
+    std::thread joiner([thread = std::move(self_thread)]() mutable {
+      if (thread.joinable()) {
+        thread.join();
+      }
+    });
+    joiner.detach();
+    return;
+  }
+
+  ice_disconnect_watchdog_thread_.join();
 }
 
 void CallCoordinator::ProcessOffer(const std::string& from,

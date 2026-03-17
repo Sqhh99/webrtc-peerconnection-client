@@ -14,7 +14,6 @@ import (
 // WebRTCSignalingServer WebRTC信令服务器
 type WebRTCSignalingServer struct {
 	clients            map[string]*WebRTCClient // map[uid]*WebRTCClient
-	visibleClients     map[string]struct{}
 	clientGenerations  map[string]uint64
 	pendingOfflineJobs map[string]*time.Timer
 	mutex              sync.RWMutex
@@ -44,7 +43,7 @@ type IceServer struct {
 	Credential string   `json:"credential,omitempty"`
 }
 
-const kOfflineGracePeriod = 5 * time.Second
+const offlineGracePeriod = 5 * time.Second
 
 var (
 	addr     = flag.String("addr", ":8081", "http service address")
@@ -108,7 +107,6 @@ func handleWebRTCConnection(w http.ResponseWriter, r *http.Request) {
 func NewWebRTCSignalingServer() *WebRTCSignalingServer {
 	return &WebRTCSignalingServer{
 		clients:            make(map[string]*WebRTCClient),
-		visibleClients:     make(map[string]struct{}),
 		clientGenerations:  make(map[string]uint64),
 		pendingOfflineJobs: make(map[string]*time.Timer),
 	}
@@ -156,11 +154,10 @@ func (s *WebRTCSignalingServer) HandleConnection(conn *websocket.Conn, uid strin
 		s.mutex.Lock()
 	}
 	s.clients[uid] = client
-	s.visibleClients[uid] = struct{}{}
 	s.mutex.Unlock()
 
-	log.Printf("WebRTC client connected: %s (generation=%d, active=%d, visible=%d)",
-		uid, generation, s.getClientCount(), s.getVisibleClientCount())
+	log.Printf("WebRTC client connected: %s (generation=%d, active=%d)",
+		uid, generation, s.getClientCount())
 
 	// 启动读写协程
 	go client.writePump()
@@ -178,13 +175,6 @@ func (s *WebRTCSignalingServer) getClientCount() int {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 	return len(s.clients)
-}
-
-// getVisibleClientCount 获取当前对外可见的在线客户端数量
-func (s *WebRTCSignalingServer) getVisibleClientCount() int {
-	s.mutex.RLock()
-	defer s.mutex.RUnlock()
-	return len(s.visibleClients)
 }
 
 // sendRegisteredMessage 发送注册确认消息
@@ -257,24 +247,30 @@ func (s *WebRTCSignalingServer) getIceServers() []IceServer {
 // removeClient 移除客户端
 func (s *WebRTCSignalingServer) removeClient(client *WebRTCClient) {
 	s.mutex.Lock()
+	shouldBroadcastClientList := false
 	// 只有当 map 中的客户端就是当前这个客户端时才删除
 	if existingClient, ok := s.clients[client.uid]; ok && existingClient == client {
 		uid := client.uid
 		generation := client.generation
 		delete(s.clients, client.uid)
 		log.Printf("WebRTC client disconnected: %s (generation=%d, active=%d). Waiting %s before offline broadcast.",
-			uid, generation, len(s.clients), kOfflineGracePeriod)
+			uid, generation, len(s.clients), offlineGracePeriod)
 
 		if pendingOfflineJob, ok := s.pendingOfflineJobs[uid]; ok {
 			pendingOfflineJob.Stop()
 		}
-		s.pendingOfflineJobs[uid] = time.AfterFunc(kOfflineGracePeriod, func() {
+		s.pendingOfflineJobs[uid] = time.AfterFunc(offlineGracePeriod, func() {
 			s.confirmOffline(uid, generation)
 		})
+		shouldBroadcastClientList = true
 	} else {
 		log.Printf("WebRTC client disconnected, but a newer connection is active: %s", client.uid)
 	}
 	s.mutex.Unlock()
+
+	if shouldBroadcastClientList {
+		s.broadcastClientList()
+	}
 
 	// 安全地关闭 send channel
 	defer func() {
@@ -287,7 +283,7 @@ func (s *WebRTCSignalingServer) removeClient(client *WebRTCClient) {
 
 // confirmOffline 在宽限期结束后确认用户仍然离线，再广播离线状态。
 func (s *WebRTCSignalingServer) confirmOffline(uid string, generation uint64) {
-	shouldBroadcastOffline := false
+	shouldNotifyOffline := false
 
 	s.mutex.Lock()
 
@@ -306,21 +302,13 @@ func (s *WebRTCSignalingServer) confirmOffline(uid string, generation uint64) {
 		return
 	}
 
-	if _, visible := s.visibleClients[uid]; !visible {
-		delete(s.pendingOfflineJobs, uid)
-		s.mutex.Unlock()
-		return
-	}
-
-	delete(s.visibleClients, uid)
 	delete(s.pendingOfflineJobs, uid)
 	log.Printf("Confirmed offline after grace period: %s", uid)
-	shouldBroadcastOffline = true
+	shouldNotifyOffline = true
 	s.mutex.Unlock()
 
-	if shouldBroadcastOffline {
+	if shouldNotifyOffline {
 		s.notifyUserOffline(uid)
-		s.broadcastClientList()
 	}
 }
 
@@ -386,7 +374,7 @@ func (s *WebRTCSignalingServer) relayMessage(senderUID string, msg *WebRTCMessag
 func (s *WebRTCSignalingServer) broadcastClientList() {
 	s.mutex.RLock()
 	var clients []map[string]string
-	for uid := range s.visibleClients {
+	for uid := range s.clients {
 		clients = append(clients, map[string]string{"id": uid})
 	}
 	s.mutex.RUnlock()
@@ -425,7 +413,7 @@ func (s *WebRTCSignalingServer) broadcastClientList() {
 func (s *WebRTCSignalingServer) sendClientList(client *WebRTCClient) {
 	s.mutex.RLock()
 	var clients []map[string]string
-	for uid := range s.visibleClients {
+	for uid := range s.clients {
 		clients = append(clients, map[string]string{"id": uid})
 	}
 	s.mutex.RUnlock()
