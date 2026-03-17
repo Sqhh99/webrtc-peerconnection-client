@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -26,6 +27,8 @@ type WebRTCClient struct {
 	conn       *websocket.Conn
 	server     *WebRTCSignalingServer
 	send       chan []byte
+	closed     uint32
+	closeOnce  sync.Once
 }
 
 // WebRTCMessage WebRTC信令消息结构
@@ -142,13 +145,7 @@ func (s *WebRTCSignalingServer) HandleConnection(conn *websocket.Conn, uid strin
 
 		// 在锁外关闭旧连接，避免死锁
 		go func() {
-			existingClient.conn.Close()
-			defer func() {
-				if r := recover(); r != nil {
-					log.Printf("Panic while closing previous send channel: %v", r)
-				}
-			}()
-			close(existingClient.send)
+			existingClient.close()
 		}()
 
 		s.mutex.Lock()
@@ -199,11 +196,10 @@ func (s *WebRTCSignalingServer) sendRegisteredMessage(client *WebRTCClient) {
 		return
 	}
 
-	select {
-	case client.send <- data:
+	if client.trySend(data) {
 		log.Printf("Registration message sent: %s", client.uid)
-	default:
-		log.Printf("Client send buffer is full: %s", client.uid)
+	} else {
+		log.Printf("Client send buffer is full or client closed: %s", client.uid)
 		return
 	}
 
@@ -272,13 +268,7 @@ func (s *WebRTCSignalingServer) removeClient(client *WebRTCClient) {
 		s.broadcastClientList()
 	}
 
-	// 安全地关闭 send channel
-	defer func() {
-		if r := recover(); r != nil {
-			log.Printf("Panic while closing send channel: %v", r)
-		}
-	}()
-	close(client.send)
+	client.close()
 }
 
 // confirmOffline 在宽限期结束后确认用户仍然离线，再广播离线状态。
@@ -337,9 +327,7 @@ func (s *WebRTCSignalingServer) notifyUserOffline(uid string) {
 
 	for clientUID, client := range s.clients {
 		if clientUID != uid {
-			select {
-			case client.send <- data:
-			default:
+			if !client.trySend(data) {
 				log.Printf("Failed to send offline notification: %s", clientUID)
 			}
 		}
@@ -363,11 +351,10 @@ func (s *WebRTCSignalingServer) relayMessage(senderUID string, msg *WebRTCMessag
 		return
 	}
 
-	select {
-	case targetClient.send <- data:
+	if targetClient.trySend(data) {
 		log.Printf("Message relayed: %s -> %s (type: %s)", senderUID, msg.To, msg.Type)
-	default:
-		log.Printf("Target client send buffer is full: %s", msg.To)
+	} else {
+		log.Printf("Target client send buffer is full or client closed: %s", msg.To)
 	}
 }
 
@@ -402,9 +389,7 @@ func (s *WebRTCSignalingServer) broadcastClientList() {
 	defer s.mutex.RUnlock()
 
 	for _, client := range s.clients {
-		select {
-		case client.send <- data:
-		default:
+		if !client.trySend(data) {
 			log.Printf("Failed to broadcast client list to: %s", client.uid)
 		}
 	}
@@ -437,10 +422,9 @@ func (s *WebRTCSignalingServer) sendClientList(client *WebRTCClient) {
 		return
 	}
 
-	select {
-	case client.send <- data:
+	if client.trySend(data) {
 		log.Printf("Client list sent: %s", client.uid)
-	default:
+	} else {
 		log.Printf("Failed to send client list: %s", client.uid)
 	}
 }
@@ -453,7 +437,6 @@ func (s *WebRTCSignalingServer) sendClientList(client *WebRTCClient) {
 func (c *WebRTCClient) readPump() {
 	defer func() {
 		c.server.removeClient(c)
-		c.conn.Close()
 	}()
 
 	c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
@@ -507,18 +490,13 @@ func (c *WebRTCClient) writePump() {
 	ticker := time.NewTicker(54 * time.Second)
 	defer func() {
 		ticker.Stop()
-		c.conn.Close()
+		c.close()
 	}()
 
 	for {
 		select {
-		case message, ok := <-c.send:
+		case message := <-c.send:
 			c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			if !ok {
-				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
-				return
-			}
-
 			if err := c.conn.WriteMessage(websocket.TextMessage, message); err != nil {
 				log.Printf("Failed to write message: %v", err)
 				return
@@ -531,4 +509,25 @@ func (c *WebRTCClient) writePump() {
 			}
 		}
 	}
+}
+
+func (c *WebRTCClient) trySend(message []byte) bool {
+	if atomic.LoadUint32(&c.closed) != 0 {
+		return false
+	}
+	select {
+	case c.send <- message:
+		return true
+	default:
+		return false
+	}
+}
+
+func (c *WebRTCClient) close() {
+	c.closeOnce.Do(func() {
+		atomic.StoreUint32(&c.closed, 1)
+		if err := c.conn.Close(); err != nil && !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+			log.Printf("Failed to close websocket connection for %s: %v", c.uid, err)
+		}
+	})
 }
