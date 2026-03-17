@@ -4,26 +4,17 @@
 #include "webrtcengine.h"
 
 #include <filesystem>
-#include <optional>
 #include <utility>
 
 #include "api/jsep.h"
 #include "api/make_ref_counted.h"
 #include "api/stats/rtc_stats_collector_callback.h"
-#include "api/test/create_frame_generator.h"
 #include "ffmpeg_file_source.h"
-#include "modules/video_capture/video_capture_factory.h"
 #include "rtc_base/logging.h"
 #include "switchable_audio_input_win.h"
-#include "system_wrappers/include/clock.h"
-#include "test/frame_generator.h"
-#include "test/frame_generator_capturer.h"
-#include "test/platform_video_capturer.h"
-#include "test/test_video_capturer.h"
 
 namespace webrtcengine_internal {
 
-using webrtc::test::TestVideoCapturer;
 namespace fs = std::filesystem;
 
 inline const char* BoolToString(bool value) {
@@ -61,66 +52,8 @@ inline std::string GetSourceDisplayName(const LocalVideoSourceConfig& config) {
   return LocalVideoSourceKindToString(config.kind);
 }
 
-inline std::unique_ptr<TestVideoCapturer> CreateCapturer(
-    webrtc::TaskQueueFactory& task_queue_factory) {
-  const size_t kWidth = 640;
-  const size_t kHeight = 480;
-  const size_t kFps = 30;
-
-  std::unique_ptr<webrtc::VideoCaptureModule::DeviceInfo> info(
-      webrtc::VideoCaptureFactory::CreateDeviceInfo());
-  if (!info) {
-    return nullptr;
-  }
-
-  int num_devices = info->NumberOfDevices();
-  for (int i = 0; i < num_devices; ++i) {
-    std::unique_ptr<TestVideoCapturer> capturer =
-        webrtc::test::CreateVideoCapturer(kWidth, kHeight, kFps, i);
-    if (capturer) {
-      return capturer;
-    }
-  }
-
-  auto frame_generator = webrtc::test::CreateSquareFrameGenerator(
-      kWidth, kHeight, std::nullopt, std::nullopt);
-  return std::make_unique<webrtc::test::FrameGeneratorCapturer>(
-      webrtc::Clock::GetRealTimeClock(), std::move(frame_generator), kFps,
-      task_queue_factory);
-}
-
-class CapturerTrackSource : public ManagedVideoTrackSource {
- public:
-  static webrtc::scoped_refptr<ManagedVideoTrackSource> Create(
-      webrtc::TaskQueueFactory& task_queue_factory) {
-    std::unique_ptr<TestVideoCapturer> capturer =
-        CreateCapturer(task_queue_factory);
-    if (capturer) {
-      capturer->Start();
-      return webrtc::make_ref_counted<CapturerTrackSource>(std::move(capturer));
-    }
-    return nullptr;
-  }
-
-  ~CapturerTrackSource() override { Stop(); }
-
-  void Stop() override {
-    if (capturer_) {
-      capturer_->Stop();
-    }
-  }
-
- protected:
-  explicit CapturerTrackSource(std::unique_ptr<TestVideoCapturer> capturer)
-      : capturer_(std::move(capturer)) {}
-
- private:
-  webrtc::VideoSourceInterface<webrtc::VideoFrame>* source() override {
-    return capturer_.get();
-  }
-
-  std::unique_ptr<TestVideoCapturer> capturer_;
-};
+webrtc::scoped_refptr<ManagedVideoTrackSource> CreateCapturerTrackSource(
+    webrtc::TaskQueueFactory& task_queue_factory);
 
 class SetRemoteDescriptionObserver
     : public webrtc::SetRemoteDescriptionObserverInterface {
@@ -336,7 +269,7 @@ class WebRTCEngine::LocalMediaPipeline {
       std::string* error_message) const {
     switch (config.kind) {
       case LocalVideoSourceKind::Camera:
-        return webrtcengine_internal::CapturerTrackSource::Create(
+        return webrtcengine_internal::CreateCapturerTrackSource(
             env_.task_queue_factory());
       case LocalVideoSourceKind::File:
         return FfmpegFileSource::Create(env_, config.file_path,

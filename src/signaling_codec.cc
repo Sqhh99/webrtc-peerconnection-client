@@ -164,10 +164,11 @@ bool ParseSignalingMessage(const std::string& message,
   }
 
   if (!envelope.is_object()) {
+    *parsed = ParsedSignalingMessage{};
+    parsed->type = SignalingMessageType::Unknown;
     if (error_message) {
       error_message->clear();
     }
-    parsed->type = SignalingMessageType::Unknown;
     return true;
   }
 

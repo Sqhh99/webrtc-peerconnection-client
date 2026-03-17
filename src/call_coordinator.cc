@@ -238,31 +238,36 @@ void CallCoordinator::OnIceConnectionStateChanged(
     last_stats_.ice_state = state_text;
   }
 
-  if (state == webrtc::PeerConnectionInterface::kIceConnectionConnected ||
-      state == webrtc::PeerConnectionInterface::kIceConnectionCompleted) {
-    StopIceDisconnectWatchdog();
-    PostToCallControl([this]() {
+  PostToCallControl([this, state, state_text]() {
+    if (state == webrtc::PeerConnectionInterface::kIceConnectionConnected ||
+        state == webrtc::PeerConnectionInterface::kIceConnectionCompleted) {
+      StopIceDisconnectWatchdog();
       if (call_manager_) {
         call_manager_->NotifyPeerConnectionEstablished();
       }
-    });
-  } else if (state == webrtc::PeerConnectionInterface::kIceConnectionFailed ||
-             state == webrtc::PeerConnectionInterface::kIceConnectionDisconnected ||
-             state == webrtc::PeerConnectionInterface::kIceConnectionClosed) {
-    const bool should_watch =
-        call_manager_ && call_manager_->GetCallState() == CallState::Connected;
-    if (should_watch) {
-      StartIceDisconnectWatchdog();
-    } else {
-      StopIceDisconnectWatchdog();
+      return;
     }
-    if (ui_observer_) {
-      ui_observer_->OnLogMessage("ICE connection state changed to " + state_text,
-                                 "warning");
+
+    if (state == webrtc::PeerConnectionInterface::kIceConnectionFailed ||
+        state == webrtc::PeerConnectionInterface::kIceConnectionDisconnected ||
+        state == webrtc::PeerConnectionInterface::kIceConnectionClosed) {
+      const bool should_watch =
+          call_manager_ &&
+          call_manager_->GetCallState() == CallState::Connected;
+      if (should_watch) {
+        StartIceDisconnectWatchdog();
+      } else {
+        StopIceDisconnectWatchdog();
+      }
+      if (ui_observer_) {
+        ui_observer_->OnLogMessage(
+            "ICE connection state changed to " + state_text, "warning");
+      }
+      return;
     }
-  } else {
+
     StopIceDisconnectWatchdog();
-  }
+  });
 }
 
 void CallCoordinator::PostToCallControl(std::function<void()> task) {

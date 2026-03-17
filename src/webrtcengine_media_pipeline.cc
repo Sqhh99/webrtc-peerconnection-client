@@ -1,7 +1,92 @@
 #include "webrtcengine_internal.h"
 
+#include <optional>
+
 #include "api/audio_options.h"
+#include "api/test/create_frame_generator.h"
+#include "modules/video_capture/video_capture_factory.h"
 #include "rtc_base/logging.h"
+#include "system_wrappers/include/clock.h"
+#include "test/frame_generator.h"
+#include "test/frame_generator_capturer.h"
+#include "test/platform_video_capturer.h"
+#include "test/test_video_capturer.h"
+
+namespace {
+
+using webrtc::test::TestVideoCapturer;
+
+std::unique_ptr<TestVideoCapturer> CreateCapturer(
+    webrtc::TaskQueueFactory& task_queue_factory) {
+  const size_t kWidth = 640;
+  const size_t kHeight = 480;
+  const size_t kFps = 30;
+
+  std::unique_ptr<webrtc::VideoCaptureModule::DeviceInfo> info(
+      webrtc::VideoCaptureFactory::CreateDeviceInfo());
+  if (!info) {
+    return nullptr;
+  }
+
+  const int num_devices = info->NumberOfDevices();
+  for (int i = 0; i < num_devices; ++i) {
+    std::unique_ptr<TestVideoCapturer> capturer =
+        webrtc::test::CreateVideoCapturer(kWidth, kHeight, kFps, i);
+    if (capturer) {
+      return capturer;
+    }
+  }
+
+  auto frame_generator = webrtc::test::CreateSquareFrameGenerator(
+      kWidth, kHeight, std::nullopt, std::nullopt);
+  return std::make_unique<webrtc::test::FrameGeneratorCapturer>(
+      webrtc::Clock::GetRealTimeClock(), std::move(frame_generator), kFps,
+      task_queue_factory);
+}
+
+class CapturerTrackSource : public ManagedVideoTrackSource {
+ public:
+  static webrtc::scoped_refptr<ManagedVideoTrackSource> Create(
+      webrtc::TaskQueueFactory& task_queue_factory) {
+    std::unique_ptr<TestVideoCapturer> capturer =
+        CreateCapturer(task_queue_factory);
+    if (!capturer) {
+      return nullptr;
+    }
+    capturer->Start();
+    return webrtc::make_ref_counted<CapturerTrackSource>(std::move(capturer));
+  }
+
+  ~CapturerTrackSource() override { Stop(); }
+
+  void Stop() override {
+    if (capturer_) {
+      capturer_->Stop();
+    }
+  }
+
+ protected:
+  explicit CapturerTrackSource(std::unique_ptr<TestVideoCapturer> capturer)
+      : capturer_(std::move(capturer)) {}
+
+ private:
+  webrtc::VideoSourceInterface<webrtc::VideoFrame>* source() override {
+    return capturer_.get();
+  }
+
+  std::unique_ptr<TestVideoCapturer> capturer_;
+};
+
+}  // namespace
+
+namespace webrtcengine_internal {
+
+webrtc::scoped_refptr<ManagedVideoTrackSource> CreateCapturerTrackSource(
+    webrtc::TaskQueueFactory& task_queue_factory) {
+  return CapturerTrackSource::Create(task_queue_factory);
+}
+
+}  // namespace webrtcengine_internal
 
 bool WebRTCEngine::AddTracks() {
   if (!peer_connection_) {

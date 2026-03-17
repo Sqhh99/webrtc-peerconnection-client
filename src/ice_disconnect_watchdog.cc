@@ -1,5 +1,6 @@
 #include "ice_disconnect_watchdog.h"
 
+#include <thread>
 #include <utility>
 
 IceDisconnectWatchdog::IceDisconnectWatchdog(std::chrono::milliseconds timeout)
@@ -40,6 +41,10 @@ void IceDisconnectWatchdog::DisarmLocked() {
   ++generation_;
   if (watchdog_thread_.joinable()) {
     watchdog_thread_.request_stop();
+    if (watchdog_thread_.get_id() == std::this_thread::get_id()) {
+      watchdog_thread_.detach();
+      return;
+    }
     watchdog_thread_.join();
   }
 }
