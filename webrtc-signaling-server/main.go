@@ -303,6 +303,7 @@ func (s *WebRTCSignalingServer) confirmOffline(uid string, generation uint64) {
 	}
 
 	delete(s.pendingOfflineJobs, uid)
+	delete(s.clientGenerations, uid)
 	log.Printf("Confirmed offline after grace period: %s", uid)
 	shouldNotifyOffline = true
 	s.mutex.Unlock()
