@@ -31,6 +31,9 @@ add_executable(peerconnection_client
     src/sdl_app.cc
     src/call_coordinator.cc
     src/webrtcengine.cc
+    src/webrtcengine_peer_connection.cc
+    src/webrtcengine_media_pipeline.cc
+    src/webrtcengine_telemetry.cc
     src/defaults.cc
     src/videorenderer.cc
     src/signalclient.cc
@@ -62,6 +65,7 @@ add_executable(peerconnection_client
     include/switchable_audio_input_win.h
     include/videorenderer.h
     include/webrtcengine.h
+    src/webrtcengine_internal.h
 )
 
 target_include_directories(
