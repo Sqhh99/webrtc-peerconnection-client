@@ -17,19 +17,47 @@ if(MSVC)
 endif()
 
 find_package(Boost CONFIG REQUIRED COMPONENTS system)
-find_package(imgui CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
-find_package(SDL3 CONFIG REQUIRED)
+
+set(SLINT_ROOT "${CMAKE_SOURCE_DIR}/third_party/Slint-cpp 1.15.1")
+set(SLINT_INCLUDE_DIR "${SLINT_ROOT}/include")
+set(SLINT_RUNTIME_DLL "${SLINT_ROOT}/lib/slint_cpp.dll")
+set(SLINT_IMPORT_LIB "${SLINT_ROOT}/lib/slint_cpp.dll.lib")
+
+if(NOT EXISTS "${SLINT_INCLUDE_DIR}/slint/slint-interpreter.h")
+    message(FATAL_ERROR "Slint headers not found under ${SLINT_INCLUDE_DIR}")
+endif()
+
+if(NOT EXISTS "${SLINT_IMPORT_LIB}")
+    message(FATAL_ERROR "Slint import library not found: ${SLINT_IMPORT_LIB}")
+endif()
+
+add_library(slint_cpp SHARED IMPORTED GLOBAL)
+set_target_properties(slint_cpp PROPERTIES
+    IMPORTED_IMPLIB "${SLINT_IMPORT_LIB}"
+    IMPORTED_LOCATION "${SLINT_RUNTIME_DLL}"
+    INTERFACE_INCLUDE_DIRECTORIES
+        "${SLINT_INCLUDE_DIR};${SLINT_INCLUDE_DIR}/slint"
+)
 
 include(cmake/FetchWebRTC.cmake)
 ensure_webrtc_prebuilt()
 include(cmake/FetchFFmpeg.cmake)
 ensure_ffmpeg_prebuilt()
 
+file(TO_CMAKE_PATH "${CMAKE_SOURCE_DIR}/ui" PEERCONNECTION_UI_DIR)
+configure_file(
+    "${CMAKE_SOURCE_DIR}/cmake/ui_paths.h.in"
+    "${CMAKE_BINARY_DIR}/generated/ui_paths.h"
+    @ONLY
+)
+
 add_executable(peerconnection_client
     WIN32
     src/main.cc
-    src/sdl_app.cc
+    src/slint_app.cc
+    src/native_video_host.cc
+    ui/AppWindow.slint
     src/call_coordinator.cc
     src/call_coordinator_ports.cc
     src/webrtcengine.cc
@@ -63,7 +91,8 @@ add_executable(peerconnection_client
     include/local_media_source.h
     include/managed_video_track_source.h
     include/ffmpeg_file_source.h
-    include/sdl_app.h
+    include/slint_app.h
+    include/native_video_host.h
     include/signal_types.h
     include/signalclient.h
     include/signal_message_dispatcher.h
@@ -79,6 +108,9 @@ target_include_directories(
     PRIVATE
         "${CMAKE_SOURCE_DIR}"
         "${CMAKE_SOURCE_DIR}/include"
+        "${CMAKE_BINARY_DIR}"
+        "${SLINT_INCLUDE_DIR}"
+        "${SLINT_INCLUDE_DIR}/slint"
 )
 
 if(MSVC)
@@ -93,7 +125,6 @@ endif()
 target_compile_definitions(
     peerconnection_client
     PRIVATE
-        SDL_MAIN_HANDLED
         WIN32_LEAN_AND_MEAN
         NOMINMAX
         WEBRTC_WIN
@@ -137,9 +168,8 @@ target_link_libraries(
         webrtc_prebuilt
         ffmpeg_prebuilt
         Boost::system
-        imgui::imgui
         nlohmann_json::nlohmann_json
-        SDL3::SDL3
+        slint_cpp
         ${SYSTEM_LIBRARIES}
 )
 
@@ -157,6 +187,14 @@ foreach(FFMPEG_RUNTIME_DLL IN LISTS FFMPEG_RUNTIME_DLLS)
             "$<TARGET_FILE_DIR:peerconnection_client>"
     )
 endforeach()
+
+add_custom_command(
+    TARGET peerconnection_client
+    POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${SLINT_RUNTIME_DLL}"
+        "$<TARGET_FILE_DIR:peerconnection_client>"
+)
 
 set_target_properties(peerconnection_client PROPERTIES
     LINK_FLAGS "/SUBSYSTEM:CONSOLE"

@@ -1,0 +1,455 @@
+import { Button, ScrollView } from "std-widgets.slint";
+
+export component AppWindow inherits Window {
+    in-out property <bool> connected: false;
+    in-out property <string> signal_url: "";
+    in-out property <string> username: "";
+    in-out property <string> client_id: "";
+    in-out property <string> selected_peer_id: "";
+    in-out property <string> current_peer_id: "";
+    in-out property <string> connection_status_text: "Disconnected";
+    in-out property <string> connection_button_text: "Reconnect";
+    in-out property <string> logs_button_text: "Show Logs";
+    in-out property <bool> logs_visible: false;
+    in-out property <string> call_state_text: "Idle";
+    in-out property <string> peer_text: "(none)";
+    in-out property <bool> can_start_call: false;
+    in-out property <bool> can_hang_up: false;
+    in-out property <string> media_mode_text: "Camera";
+    in-out property <string> media_detail_text: "Camera";
+    in-out property <string> stats_text: "";
+    in-out property <[string]> clients: [];
+    in-out property <string> logs_text: "";
+    in-out property <bool> incoming_visible: false;
+    in-out property <string> incoming_caller_id: "";
+    in-out property <bool> dialog_visible: false;
+    in-out property <string> dialog_kind: "Info";
+    in-out property <string> dialog_title: "";
+    in-out property <string> dialog_message: "";
+    in-out property <image> remote_video_image;
+    in-out property <image> local_video_image;
+    in-out property <bool> remote_video_ready: false;
+    in-out property <bool> local_video_ready: false;
+
+    callback toggle_logs();
+    callback connect_or_disconnect();
+    callback select_peer(string);
+    callback start_call();
+    callback hang_up();
+    callback use_camera();
+    callback open_media_file();
+    callback accept_incoming();
+    callback reject_incoming();
+    callback dismiss_dialog();
+
+    title: "PeerConnection Client";
+    width: 1440px;
+    height: 900px;
+    background: #0b1220;
+
+    Rectangle {
+        width: parent.width;
+        height: parent.height;
+        background: #0b1220;
+
+        VerticalLayout {
+            x: 0;
+            y: 0;
+            width: parent.width;
+            height: parent.height;
+            padding: 12px;
+            spacing: 12px;
+
+            Rectangle {
+                width: parent.width;
+                height: 64px;
+                background: #111c31;
+                border-radius: 12px;
+
+                HorizontalLayout {
+                    x: 0;
+                    y: 0;
+                    width: parent.width;
+                    height: parent.height;
+                    padding: 14px;
+                    spacing: 12px;
+
+                    VerticalLayout {
+                        spacing: 2px;
+                        Text {
+                            text: "PeerConnection Client";
+                            color: #f8fafc;
+                            font-size: 22px;
+                        }
+                        Text {
+                            text: signal_url;
+                            color: #94a3b8;
+                            font-size: 12px;
+                        }
+                    }
+
+                    Rectangle { horizontal-stretch: 1; }
+
+                    VerticalLayout {
+                        spacing: 2px;
+                        Text {
+                            text: "User: " + username;
+                            color: #e2e8f0;
+                            horizontal-alignment: right;
+                        }
+                        Text {
+                            text: connection_status_text;
+                            color: connected ? #22c55e : #f97316;
+                            horizontal-alignment: right;
+                        }
+                    }
+
+                    Button {
+                        text: logs_button_text;
+                        clicked => { root.toggle_logs(); }
+                    }
+
+                    Button {
+                        text: connection_button_text;
+                        clicked => { root.connect_or_disconnect(); }
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                width: parent.width;
+                vertical-stretch: 1;
+                spacing: 12px;
+
+                Rectangle {
+                    width: 320px;
+                    vertical-stretch: 1;
+                    background: #0f172a;
+                    border-radius: 14px;
+
+                    ScrollView {
+                        x: 0;
+                        y: 0;
+                        width: parent.width;
+                        height: parent.height;
+
+                        VerticalLayout {
+                            width: parent.width;
+                            padding: 14px;
+                            spacing: 14px;
+
+                            Text {
+                                text: "Online Users";
+                                color: #f8fafc;
+                                font-size: 20px;
+                            }
+
+                            for client in clients : Rectangle {
+                                min-height: 40px;
+                                background: selected_peer_id == client ? #2563eb : #172338;
+                                border-radius: 10px;
+
+                                Text {
+                                    x: 12px;
+                                    y: 11px;
+                                    text: client;
+                                    color: #f8fafc;
+                                }
+
+                                TouchArea {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    clicked => { root.select_peer(client); }
+                                }
+                            }
+
+                            Rectangle {
+                                background: #111c31;
+                                border-radius: 12px;
+                                min-height: 140px;
+
+                                VerticalLayout {
+                                    x: 0;
+                                    y: 0;
+                                    width: parent.width;
+                                    height: parent.height;
+                                    padding: 14px;
+                                    spacing: 8px;
+
+                                    Text {
+                                        text: "Call Controls";
+                                        color: #f8fafc;
+                                        font-size: 17px;
+                                    }
+                                    Text {
+                                        text: "State: " + call_state_text;
+                                        color: #cbd5e1;
+                                    }
+                                    Text {
+                                        text: "Peer: " + peer_text;
+                                        color: #94a3b8;
+                                    }
+                                    Button {
+                                        text: "Start Call";
+                                        enabled: can_start_call;
+                                        clicked => { root.start_call(); }
+                                    }
+                                    Button {
+                                        text: "Hang Up";
+                                        enabled: can_hang_up;
+                                        clicked => { root.hang_up(); }
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                background: #111c31;
+                                border-radius: 12px;
+                                min-height: 126px;
+
+                                VerticalLayout {
+                                    x: 0;
+                                    y: 0;
+                                    width: parent.width;
+                                    height: parent.height;
+                                    padding: 14px;
+                                    spacing: 8px;
+
+                                    Text {
+                                        text: "Media Source";
+                                        color: #f8fafc;
+                                        font-size: 17px;
+                                    }
+                                    Text {
+                                        text: "Mode: " + media_mode_text;
+                                        color: #cbd5e1;
+                                    }
+                                    Text {
+                                        text: media_detail_text;
+                                        color: #94a3b8;
+                                        wrap: word-wrap;
+                                    }
+                                    Button {
+                                        text: "Use Camera";
+                                        clicked => { root.use_camera(); }
+                                    }
+                                    Button {
+                                        text: "Open Media File...";
+                                        clicked => { root.open_media_file(); }
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                background: #111c31;
+                                border-radius: 12px;
+                                min-height: 220px;
+
+                                VerticalLayout {
+                                    x: 0;
+                                    y: 0;
+                                    width: parent.width;
+                                    height: parent.height;
+                                    padding: 14px;
+                                    spacing: 8px;
+
+                                    Text {
+                                        text: "RTC Stats";
+                                        color: #f8fafc;
+                                        font-size: 17px;
+                                    }
+                                    Text {
+                                        text: stats_text;
+                                        color: #cbd5e1;
+                                        wrap: word-wrap;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                    vertical-stretch: 1;
+                    background: #0f172a;
+                    border-radius: 14px;
+
+                    Rectangle {
+                        x: 12px;
+                        y: 12px;
+                        width: parent.width - 24px;
+                        height: parent.height - 24px;
+                        background: #111827;
+                        border-radius: 12px;
+                        border-width: 1px;
+                        border-color: #263349;
+                        clip: true;
+
+                        if remote_video_ready : Image {
+                            width: parent.width;
+                            height: parent.height;
+                            source: remote_video_image;
+                            image-fit: contain;
+                        }
+
+                        if !remote_video_ready : Text {
+                            text: "Remote stream will be rendered here";
+                            color: #94a3b8;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                            width: parent.width;
+                            height: parent.height;
+                        }
+
+                        if local_video_ready : Rectangle {
+                            width: 240px;
+                            height: 135px;
+                            x: parent.width - self.width - 16px;
+                            y: parent.height - self.height - 16px;
+                            background: #0b1220cc;
+                            border-radius: 10px;
+                            border-width: 1px;
+                            border-color: #64748b;
+                            clip: true;
+
+                            Image {
+                                width: parent.width;
+                                height: parent.height;
+                                source: local_video_image;
+                                image-fit: contain;
+                            }
+
+                            Text {
+                                x: 8px;
+                                y: 6px;
+                                text: "You";
+                                color: #f8fafc;
+                                font-size: 11px;
+                            }
+                        }
+                    }
+                }
+
+                if logs_visible : Rectangle {
+                    width: 360px;
+                    vertical-stretch: 1;
+                    background: #0f172a;
+                    border-radius: 14px;
+
+                    VerticalLayout {
+                        x: 0;
+                        y: 0;
+                        width: parent.width;
+                        height: parent.height;
+                        padding: 14px;
+                        spacing: 8px;
+
+                        Text {
+                            text: "Logs";
+                            color: #f8fafc;
+                            font-size: 18px;
+                        }
+
+                        ScrollView {
+                            width: parent.width;
+                            vertical-stretch: 1;
+
+                            Text {
+                                text: logs_text;
+                                color: #cbd5e1;
+                                wrap: word-wrap;
+                                width: 320px;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if incoming_visible : Rectangle {
+            width: parent.width;
+            height: parent.height;
+            background: #00000088;
+
+            Rectangle {
+                width: 380px;
+                height: 180px;
+                x: (parent.width - 380px) / 2;
+                y: (parent.height - 180px) / 2;
+                background: #111c31;
+                border-radius: 16px;
+
+                VerticalLayout {
+                    x: 0;
+                    y: 0;
+                    width: parent.width;
+                    height: parent.height;
+                    padding: 18px;
+                    spacing: 12px;
+
+                    Text {
+                        text: "Incoming Call";
+                        color: #f8fafc;
+                        font-size: 22px;
+                    }
+                    Text {
+                        text: "From: " + incoming_caller_id;
+                        color: #cbd5e1;
+                    }
+
+                    HorizontalLayout {
+                        spacing: 12px;
+                        Button {
+                            text: "Accept";
+                            clicked => { root.accept_incoming(); }
+                        }
+                        Button {
+                            text: "Reject";
+                            clicked => { root.reject_incoming(); }
+                        }
+                    }
+                }
+            }
+        }
+
+        if dialog_visible : Rectangle {
+            width: parent.width;
+            height: parent.height;
+            background: #00000088;
+
+            Rectangle {
+                width: 420px;
+                height: 220px;
+                x: (parent.width - 420px) / 2;
+                y: (parent.height - 220px) / 2;
+                background: dialog_kind == "Error" ? #3b1118 : #111c31;
+                border-radius: 16px;
+
+                VerticalLayout {
+                    x: 0;
+                    y: 0;
+                    width: parent.width;
+                    height: parent.height;
+                    padding: 18px;
+                    spacing: 12px;
+
+                    Text {
+                        text: dialog_title;
+                        color: #f8fafc;
+                        font-size: 22px;
+                    }
+                    Text {
+                        text: dialog_message;
+                        color: #e2e8f0;
+                        wrap: word-wrap;
+                    }
+                    Button {
+                        text: "Close";
+                        clicked => { root.dismiss_dialog(); }
+                    }
+                }
+            }
+        }
+    }
+}

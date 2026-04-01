@@ -88,8 +88,10 @@ bool WebRTCEngine::Initialize() {
   webrtc::PeerConnectionFactoryDependencies deps;
   deps.signaling_thread = signaling_thread_.get();
   deps.env = env_;
-  com_initializer_ = std::make_unique<webrtc::ScopedCOMInitializer>(
-      webrtc::ScopedCOMInitializer::kMTA);
+  // Slint/winit requires the UI thread to remain STA on Windows.
+  // Core Audio can still run on a COM-initialized GUI thread, so keep the
+  // main thread in STA instead of forcing it to MTA here.
+  com_initializer_ = std::make_unique<webrtc::ScopedCOMInitializer>();
   if (!com_initializer_->Succeeded()) {
     RTC_LOG(LS_ERROR) << "Failed to initialize COM for audio";
     com_initializer_.reset();
