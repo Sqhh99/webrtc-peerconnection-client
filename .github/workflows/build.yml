@@ -35,9 +35,9 @@ jobs:
             third_party/vcpkg_installed
           key: deps-${{ runner.os }}-${{ env.WEBRTC_VERSION }}-${{ env.WEBRTC_PLATFORM }}-${{ env.FFMPEG_PACKAGE_VERSION }}-${{ env.FFMPEG_PACKAGE_TARGET }}-${{ env.VCPKG_TARGET_TRIPLET }}-${{ hashFiles('vcpkg.json') }}
 
-      - name: Build Release
+      - name: Build And Test Release
         run: |
-          call build.cmd release
+          call build.cmd test release
 
       - name: Upload executable
         if: success()

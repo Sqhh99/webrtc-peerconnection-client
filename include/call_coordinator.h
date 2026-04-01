@@ -2,18 +2,19 @@
 #define CALL_COORDINATOR_H_GUARD
 
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
-#include <thread>
 
 #include "api/environment/environment.h"
 #include "api/peer_connection_interface.h"
-#include "webrtcengine.h"
 
+#include "call_coordinator_ports.h"
 #include "icall_observer.h"
-#include "signalclient.h"
 #include "callmanager.h"
+#include "signalclient.h"
+#include "webrtcengine.h"
 
 namespace webrtc {
 class RTCStatsReport;
@@ -28,6 +29,12 @@ class CallCoordinator : public WebRTCEngineObserver,
                         public ICallController {
  public:
   explicit CallCoordinator(const webrtc::Environment& env);
+  CallCoordinator(
+      const webrtc::Environment& env,
+      std::unique_ptr<IWebRTCEnginePort> webrtc_engine,
+      std::unique_ptr<ISignalClientPort> signal_client,
+      std::unique_ptr<ICallManagerPort> call_manager,
+      std::unique_ptr<IIceDisconnectWatchdogPort> ice_disconnect_watchdog);
   ~CallCoordinator();
   
   // 设置UI观察者
@@ -101,15 +108,15 @@ class CallCoordinator : public WebRTCEngineObserver,
   void ProcessIceCandidate(const std::string& from, const IceCandidatePayload& candidate);
   void ExtractAndStoreRtcStats(const webrtc::scoped_refptr<const webrtc::RTCStatsReport>& report);
   std::string IceStateToString(webrtc::PeerConnectionInterface::IceConnectionState state) const;
+  void PostToCallControl(std::function<void()> task);
   void StartIceDisconnectWatchdog();
   void StopIceDisconnectWatchdog();
-  void StopIceDisconnectWatchdogLocked();
 
   // 组件
   const webrtc::Environment env_;
-  std::unique_ptr<WebRTCEngine> webrtc_engine_;
-  std::unique_ptr<SignalClient> signal_client_;
-  std::unique_ptr<CallManager> call_manager_;
+  std::unique_ptr<IWebRTCEnginePort> webrtc_engine_;
+  std::unique_ptr<ISignalClientPort> signal_client_;
+  std::unique_ptr<ICallManagerPort> call_manager_;
   
   // 观察者
   ICallUIObserver* ui_observer_;
@@ -124,10 +131,7 @@ class CallCoordinator : public WebRTCEngineObserver,
   RtcStatsSnapshot last_stats_;
   bool has_stats_ = false;
   std::atomic<bool> shutdown_started_{false};
-  const std::shared_ptr<void> lifetime_guard_ = std::make_shared<int>(0);
-  mutable std::mutex ice_disconnect_watchdog_mutex_;
-  std::jthread ice_disconnect_watchdog_thread_;
-  std::atomic<uint64_t> ice_disconnect_watchdog_generation_{0};
+  std::unique_ptr<IIceDisconnectWatchdogPort> ice_disconnect_watchdog_;
   struct RateSample {
     uint64_t inbound_bytes = 0;
     uint64_t outbound_bytes = 0;

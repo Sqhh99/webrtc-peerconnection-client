@@ -16,119 +16,16 @@
 #include <boost/beast/core/flat_buffer.hpp>
 #include <boost/beast/core/tcp_stream.hpp>
 #include <boost/beast/websocket.hpp>
-#include <nlohmann/json.hpp>
+
+#include "signal_message_dispatcher.h"
+#include "signaling_codec.h"
 
 namespace {
 
-using json = nlohmann::json;
 namespace asio = boost::asio;
 namespace beast = boost::beast;
 namespace websocket = beast::websocket;
 using tcp = asio::ip::tcp;
-
-SessionDescriptionPayload ParseSessionDescription(const json& payload,
-                                                  const std::string& fallback_type) {
-  SessionDescriptionPayload result;
-  result.call_id = payload.value("callId", payload.value("call_id", ""));
-  result.type = fallback_type;
-
-  if (payload.contains("sdp")) {
-    const json& sdp_value = payload.at("sdp");
-    if (sdp_value.is_object()) {
-      result.type = sdp_value.value("type", fallback_type);
-      result.sdp = sdp_value.value("sdp", "");
-      return result;
-    }
-    if (sdp_value.is_string()) {
-      result.type = payload.value("type", fallback_type);
-      result.sdp = sdp_value.get<std::string>();
-      return result;
-    }
-  }
-
-  result.type = payload.value("type", fallback_type);
-  result.sdp = payload.value("sdp", "");
-  return result;
-}
-
-IceCandidatePayload ParseIceCandidate(const json& payload) {
-  IceCandidatePayload result;
-  result.call_id = payload.value("callId", payload.value("call_id", ""));
-
-  const json* candidate_payload = &payload;
-  if (payload.contains("candidate") && payload.at("candidate").is_object()) {
-    candidate_payload = &payload.at("candidate");
-  }
-
-  result.sdp_mid = candidate_payload->value("sdpMid", "");
-  if (result.sdp_mid.empty()) {
-    result.sdp_mid = candidate_payload->value("sdp_mid", "");
-  }
-
-  if (candidate_payload->contains("sdpMLineIndex")) {
-    result.sdp_mline_index = candidate_payload->at("sdpMLineIndex").get<int>();
-  } else if (candidate_payload->contains("sdpMlineIndex")) {
-    result.sdp_mline_index = candidate_payload->at("sdpMlineIndex").get<int>();
-  } else if (candidate_payload->contains("sdp_mline_index")) {
-    result.sdp_mline_index = candidate_payload->at("sdp_mline_index").get<int>();
-  }
-
-  result.candidate = candidate_payload->value("candidate", "");
-  return result;
-}
-
-std::vector<IceServerConfig> ParseIceServers(const json& payload) {
-  std::vector<IceServerConfig> ice_servers;
-  if (!payload.contains("iceServers") || !payload.at("iceServers").is_array()) {
-    return ice_servers;
-  }
-
-  for (const auto& server_value : payload.at("iceServers")) {
-    if (!server_value.is_object()) {
-      continue;
-    }
-
-    IceServerConfig config;
-    if (server_value.contains("urls")) {
-      const auto& urls = server_value.at("urls");
-      if (urls.is_array()) {
-        for (const auto& url_value : urls) {
-          if (url_value.is_string()) {
-            config.urls.push_back(url_value.get<std::string>());
-          }
-        }
-      } else if (urls.is_string()) {
-        config.urls.push_back(urls.get<std::string>());
-      }
-    }
-
-    config.username = server_value.value("username", "");
-    config.credential = server_value.value("credential", "");
-    ice_servers.push_back(std::move(config));
-  }
-
-  return ice_servers;
-}
-
-std::vector<ClientInfo> ParseClientList(const json& payload) {
-  std::vector<ClientInfo> clients;
-  if (!payload.contains("clients") || !payload.at("clients").is_array()) {
-    return clients;
-  }
-
-  for (const auto& client_value : payload.at("clients")) {
-    ClientInfo client;
-    if (client_value.is_object()) {
-      client.id = client_value.value("id", "");
-    } else if (client_value.is_string()) {
-      client.id = client_value.get<std::string>();
-    }
-    if (!client.id.empty()) {
-      clients.push_back(std::move(client));
-    }
-  }
-  return clients;
-}
 
 }  // namespace
 
@@ -221,122 +118,65 @@ void SignalClient::RegisterObserver(SignalClientObserver* observer) {
 
 void SignalClient::SendCallRequest(const std::string& to,
                                    const std::string& call_id) {
-  json message = {
-      {"type", "call-request"},
-      {"from", GetClientId()},
-      {"to", to},
-      {"payload", {{"callId", call_id},
-                   {"timestamp",
-                    std::chrono::duration_cast<std::chrono::milliseconds>(
-                        std::chrono::system_clock::now().time_since_epoch())
-                        .count()}}}};
-  QueueJsonMessage(message.dump());
+  QueueJsonMessage(BuildCallRequestMessage(GetClientId(), to, call_id));
 }
 
 void SignalClient::SendCallResponse(const std::string& to,
                                     const std::string& call_id,
                                     bool accepted,
                                     const std::string& reason) {
-  json payload = {{"callId", call_id}, {"accepted", accepted}};
-  if (!reason.empty()) {
-    payload["reason"] = reason;
-  }
-
-  json message = {{"type", "call-response"},
-                  {"from", GetClientId()},
-                  {"to", to},
-                  {"payload", std::move(payload)}};
-  QueueJsonMessage(message.dump());
+  QueueJsonMessage(
+      BuildCallResponseMessage(GetClientId(), to, call_id, accepted, reason));
 }
 
 void SignalClient::SendCallCancel(const std::string& to,
                                   const std::string& call_id,
                                   const std::string& reason) {
-  json payload = {{"callId", call_id}};
-  if (!reason.empty()) {
-    payload["reason"] = reason;
-  }
-
-  json message = {{"type", "call-cancel"},
-                  {"from", GetClientId()},
-                  {"to", to},
-                  {"payload", std::move(payload)}};
-  QueueJsonMessage(message.dump());
+  QueueJsonMessage(
+      BuildCallCancelMessage(GetClientId(), to, call_id, reason));
 }
 
 void SignalClient::SendCallEnd(const std::string& to,
                                const std::string& call_id,
                                const std::string& reason) {
-  json payload = {{"callId", call_id}};
-  if (!reason.empty()) {
-    payload["reason"] = reason;
-  }
-
-  json message = {{"type", "call-end"},
-                  {"from", GetClientId()},
-                  {"to", to},
-                  {"payload", std::move(payload)}};
-  QueueJsonMessage(message.dump());
+  QueueJsonMessage(BuildCallEndMessage(GetClientId(), to, call_id, reason));
 }
 
 void SignalClient::SendOffer(const std::string& to,
                              const SessionDescriptionPayload& sdp) {
-  json message = {
-      {"type", "offer"},
-      {"from", GetClientId()},
-      {"to", to},
-      {"payload",
-       {{"callId", sdp.call_id},
-        {"sdp", {{"type", sdp.type}, {"sdp", sdp.sdp}}}}}};
-  QueueJsonMessage(message.dump());
+  QueueJsonMessage(BuildOfferMessage(GetClientId(), to, sdp));
 }
 
 void SignalClient::SendAnswer(const std::string& to,
                               const SessionDescriptionPayload& sdp) {
-  json message = {
-      {"type", "answer"},
-      {"from", GetClientId()},
-      {"to", to},
-      {"payload",
-       {{"callId", sdp.call_id},
-        {"sdp", {{"type", sdp.type}, {"sdp", sdp.sdp}}}}}};
-  QueueJsonMessage(message.dump());
+  QueueJsonMessage(BuildAnswerMessage(GetClientId(), to, sdp));
 }
 
 void SignalClient::SendIceCandidate(const std::string& to,
                                     const IceCandidatePayload& candidate) {
-  json message = {{"type", "ice-candidate"},
-                  {"from", GetClientId()},
-                  {"to", to},
-                  {"payload",
-                   {{"callId", candidate.call_id},
-                    {"candidate",
-                     {{"sdpMid", candidate.sdp_mid},
-                      {"sdpMLineIndex", candidate.sdp_mline_index},
-                      {"candidate", candidate.candidate}}}}}};
-  QueueJsonMessage(message.dump());
+  QueueJsonMessage(BuildIceCandidateMessage(GetClientId(), to, candidate));
 }
 
 void SignalClient::RequestClientList() {
-  json message = {{"type", "list-clients"}, {"from", GetClientId()}};
-  QueueJsonMessage(message.dump());
+  QueueJsonMessage(BuildListClientsMessage(GetClientId()));
 }
 
-void SignalClient::InvokeOnIoThread(std::function<void()> task) {
+bool SignalClient::InvokeOnIoThread(std::function<void()> task) {
   if (!task) {
-    return;
+    return false;
   }
 
   if (!impl_ || !impl_->io_thread.joinable() || impl_->io_context.stopped()) {
-    return;
+    return false;
   }
 
   if (impl_->io_thread.get_id() == std::this_thread::get_id()) {
     task();
-    return;
+    return true;
   }
 
   asio::post(impl_->io_context, [task = std::move(task)]() mutable { task(); });
+  return true;
 }
 
 void SignalClient::EnsureIoThreadStarted() {
@@ -458,10 +298,8 @@ void SignalClient::ConnectOnIoThread() {
                                            observer->OnConnected(client_id);
                                          }
 
-                                         json register_message = {
-                                             {"type", "register"},
-                                             {"from", client_id}};
-                                         QueueJsonMessage(register_message.dump());
+                                         QueueJsonMessage(
+                                             BuildRegisterMessage(client_id));
                                          StartRead();
                                        });
                              });
@@ -541,26 +379,6 @@ void SignalClient::WriteNextMessage() {
 }
 
 void SignalClient::HandleIncomingMessage(const std::string& message) {
-  json payload;
-  try {
-    payload = json::parse(message);
-  } catch (const std::exception& ex) {
-    ReportConnectionError(std::string("Invalid JSON from signaling server: ") +
-                          ex.what());
-    return;
-  }
-
-  if (!payload.is_object()) {
-    return;
-  }
-
-  const std::string type = payload.value("type", "");
-  const std::string from = payload.value("from", "");
-  const json message_payload =
-      payload.contains("payload") && payload.at("payload").is_object()
-          ? payload.at("payload")
-          : json::object();
-
   SignalClientObserver* observer = nullptr;
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
@@ -570,74 +388,22 @@ void SignalClient::HandleIncomingMessage(const std::string& message) {
     return;
   }
 
-  switch (GetMessageType(type)) {
-    case SignalMessageType::Registered: {
-      const auto ice_servers = ParseIceServers(message_payload);
-      {
-        std::lock_guard<std::mutex> lock(state_mutex_);
-        ice_servers_ = ice_servers;
-      }
-      observer->OnIceServersReceived(ice_servers);
-      RequestClientList();
-      break;
-    }
-    case SignalMessageType::ClientList:
-      observer->OnClientListUpdate(ParseClientList(message_payload));
-      break;
-    case SignalMessageType::UserOffline:
-      observer->OnUserOffline(message_payload.value("clientId", ""));
-      break;
-    case SignalMessageType::CallRequest:
-      observer->OnCallRequest(
-          from, message_payload.value("callId", message_payload.value("call_id", "")));
-      break;
-    case SignalMessageType::CallResponse:
-      observer->OnCallResponse(
-          from,
-          message_payload.value("callId", message_payload.value("call_id", "")),
-          message_payload.value("accepted", false),
-          message_payload.value("reason", ""));
-      break;
-    case SignalMessageType::CallCancel:
-      observer->OnCallCancel(
-          from,
-          message_payload.value("callId", message_payload.value("call_id", "")),
-          message_payload.value("reason", ""));
-      break;
-    case SignalMessageType::CallEnd:
-      observer->OnCallEnd(
-          from,
-          message_payload.value("callId", message_payload.value("call_id", "")),
-          message_payload.value("reason", ""));
-      break;
-    case SignalMessageType::Offer:
-      observer->OnOffer(from, ParseSessionDescription(message_payload, "offer"));
-      break;
-    case SignalMessageType::Answer:
-      observer->OnAnswer(from,
-                         ParseSessionDescription(message_payload, "answer"));
-      break;
-    case SignalMessageType::IceCandidate:
-      observer->OnIceCandidate(from, ParseIceCandidate(message_payload));
-      break;
-    default:
-      break;
+  const SignalMessageDispatchOutcome outcome =
+      DispatchSignalingMessage(message, observer);
+  if (!outcome.success) {
+    ReportConnectionError(outcome.error);
+    return;
   }
-}
 
-SignalMessageType SignalClient::GetMessageType(const std::string& type_str) const {
-  if (type_str == "register") return SignalMessageType::Register;
-  if (type_str == "registered") return SignalMessageType::Registered;
-  if (type_str == "client-list") return SignalMessageType::ClientList;
-  if (type_str == "user-offline") return SignalMessageType::UserOffline;
-  if (type_str == "call-request") return SignalMessageType::CallRequest;
-  if (type_str == "call-response") return SignalMessageType::CallResponse;
-  if (type_str == "call-cancel") return SignalMessageType::CallCancel;
-  if (type_str == "call-end") return SignalMessageType::CallEnd;
-  if (type_str == "offer") return SignalMessageType::Offer;
-  if (type_str == "answer") return SignalMessageType::Answer;
-  if (type_str == "ice-candidate") return SignalMessageType::IceCandidate;
-  return SignalMessageType::Unknown;
+  if (outcome.has_ice_servers) {
+    {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      ice_servers_ = outcome.ice_servers;
+    }
+  }
+  if (outcome.request_client_list) {
+    RequestClientList();
+  }
 }
 
 void SignalClient::AttemptReconnect() {

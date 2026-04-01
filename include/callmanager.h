@@ -2,12 +2,13 @@
 #define EXAMPLES_PEERCONNECTION_CLIENT_CALLMANAGER_H_
 
 #include <atomic>
+#include <chrono>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
 
-#include "signalclient.h"
+#include "call_signaling_transport.h"
 
 // 呼叫状态
 enum class CallState {
@@ -49,11 +50,15 @@ class CallManagerObserver {
 // 呼叫管理器：管理完整的呼叫流程
 class CallManager {
  public:
-  CallManager();
+  static constexpr int kDefaultCallRequestTimeoutMs = 30000;  // 30秒超时
+
+  explicit CallManager(
+      std::chrono::milliseconds call_request_timeout =
+          std::chrono::milliseconds(kDefaultCallRequestTimeoutMs));
   ~CallManager();
 
-  // 设置信令客户端（必须在使用前设置）
-  void SetSignalClient(SignalClient* signal_client);
+  // 设置信令传输（必须在使用前设置）
+  void SetSignalTransport(CallSignalingTransport* signal_transport);
   
   // 注册观察者
   void RegisterObserver(CallManagerObserver* observer);
@@ -104,7 +109,7 @@ class CallManager {
   void StopCallRequestTimerLocked();
 
   mutable std::mutex mutex_;
-  SignalClient* signal_client_;
+  CallSignalingTransport* signal_transport_;
   CallManagerObserver* observer_;
 
   CallState call_state_;
@@ -113,8 +118,7 @@ class CallManager {
   bool is_caller_;  // 是否是主叫方
   std::jthread call_request_timer_thread_;
   std::atomic<uint64_t> timer_generation_{0};
-
-  static constexpr int kCallRequestTimeoutMs = 30000;  // 30秒超时
+  const std::chrono::milliseconds call_request_timeout_;
 };
 
 #endif  // EXAMPLES_PEERCONNECTION_CLIENT_CALLMANAGER_H_

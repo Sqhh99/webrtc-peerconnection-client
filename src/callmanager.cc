@@ -17,19 +17,20 @@ std::string GenerateCallId() {
 
 }  // namespace
 
-CallManager::CallManager()
-    : signal_client_(nullptr),
+CallManager::CallManager(std::chrono::milliseconds call_request_timeout)
+    : signal_transport_(nullptr),
       observer_(nullptr),
       call_state_(CallState::Idle),
-      is_caller_(false) {}
+      is_caller_(false),
+      call_request_timeout_(call_request_timeout) {}
 
 CallManager::~CallManager() {
   StopCallRequestTimer();
 }
 
-void CallManager::SetSignalClient(SignalClient* signal_client) {
+void CallManager::SetSignalTransport(CallSignalingTransport* signal_transport) {
   std::lock_guard<std::mutex> lock(mutex_);
-  signal_client_ = signal_client;
+  signal_transport_ = signal_transport;
 }
 
 void CallManager::RegisterObserver(CallManagerObserver* observer) {
@@ -38,11 +39,11 @@ void CallManager::RegisterObserver(CallManagerObserver* observer) {
 }
 
 bool CallManager::InitiateCall(const std::string& target_client_id) {
-  SignalClient* signal_client = nullptr;
+  CallSignalingTransport* signal_transport = nullptr;
   std::string call_id;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (!signal_client_ || !signal_client_->IsConnected() ||
+    if (!signal_transport_ || !signal_transport_->IsConnected() ||
         call_state_ != CallState::Idle) {
       return false;
     }
@@ -50,30 +51,31 @@ bool CallManager::InitiateCall(const std::string& target_client_id) {
     current_peer_ = target_client_id;
     current_call_id_ = GenerateCallId();
     is_caller_ = true;
-    signal_client = signal_client_;
+    signal_transport = signal_transport_;
     call_id = current_call_id_;
   }
 
   SetCallState(CallState::Calling);
-  signal_client->SendCallRequest(target_client_id, call_id);
+  signal_transport->SendCallRequest(target_client_id, call_id);
   StartCallRequestTimer();
   return true;
 }
 
 void CallManager::CancelCall() {
   std::string current_peer;
-  SignalClient* signal_client = nullptr;
+  CallSignalingTransport* signal_transport = nullptr;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     if (call_state_ != CallState::Calling) {
       return;
     }
     current_peer = current_peer_;
-    signal_client = signal_client_;
+    signal_transport = signal_transport_;
   }
 
-  if (signal_client && !current_peer.empty()) {
-    signal_client->SendCallCancel(current_peer, GetCurrentCallId(), "cancelled");
+  if (signal_transport && !current_peer.empty()) {
+    signal_transport->SendCallCancel(current_peer, GetCurrentCallId(),
+                                     "cancelled");
   }
   CleanupCall();
 }
@@ -82,7 +84,7 @@ void CallManager::AcceptCall() {
   std::string current_peer;
   std::string current_call_id;
   CallManagerObserver* observer = nullptr;
-  SignalClient* signal_client = nullptr;
+  CallSignalingTransport* signal_transport = nullptr;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     if (call_state_ != CallState::Receiving) {
@@ -91,14 +93,14 @@ void CallManager::AcceptCall() {
     current_peer = current_peer_;
     current_call_id = current_call_id_;
     observer = observer_;
-    signal_client = signal_client_;
+    signal_transport = signal_transport_;
   }
 
-  if (!signal_client) {
+  if (!signal_transport) {
     return;
   }
 
-  signal_client->SendCallResponse(current_peer, current_call_id, true);
+  signal_transport->SendCallResponse(current_peer, current_call_id, true);
   SetCallState(CallState::Connecting);
 
   if (observer) {
@@ -109,7 +111,7 @@ void CallManager::AcceptCall() {
 void CallManager::RejectCall(const std::string& reason) {
   std::string current_peer;
   std::string current_call_id;
-  SignalClient* signal_client = nullptr;
+  CallSignalingTransport* signal_transport = nullptr;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     if (call_state_ != CallState::Receiving) {
@@ -117,11 +119,11 @@ void CallManager::RejectCall(const std::string& reason) {
     }
     current_peer = current_peer_;
     current_call_id = current_call_id_;
-    signal_client = signal_client_;
+    signal_transport = signal_transport_;
   }
 
-  if (signal_client && !current_peer.empty()) {
-    signal_client->SendCallResponse(
+  if (signal_transport && !current_peer.empty()) {
+    signal_transport->SendCallResponse(
         current_peer, current_call_id, false,
         reason.empty() ? "rejected" : reason);
   }
@@ -132,21 +134,21 @@ void CallManager::EndCall() {
   std::string current_peer;
   std::string current_call_id;
   CallManagerObserver* observer = nullptr;
-  SignalClient* signal_client = nullptr;
+  CallSignalingTransport* signal_transport = nullptr;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (call_state_ == CallState::Idle) {
+    if (call_state_ == CallState::Idle || call_state_ == CallState::Ending) {
       return;
     }
     current_peer = current_peer_;
     current_call_id = current_call_id_;
     observer = observer_;
-    signal_client = signal_client_;
+    signal_transport = signal_transport_;
     call_state_ = CallState::Ending;
   }
 
-  if (signal_client && !current_peer.empty()) {
-    signal_client->SendCallEnd(current_peer, current_call_id, "hangup");
+  if (signal_transport && !current_peer.empty()) {
+    signal_transport->SendCallEnd(current_peer, current_call_id, "hangup");
   }
   if (observer) {
     observer->OnNeedClosePeerConnection();
@@ -196,7 +198,7 @@ void CallManager::NotifyPeerConnectionEstablished() {
 
 void CallManager::HandleCallRequest(const std::string& from,
                                     const std::string& call_id) {
-  SignalClient* signal_client = nullptr;
+  CallSignalingTransport* signal_transport = nullptr;
   CallManagerObserver* observer = nullptr;
   bool busy = false;
   {
@@ -206,7 +208,7 @@ void CallManager::HandleCallRequest(const std::string& from,
     }
     if (call_state_ != CallState::Idle) {
       busy = true;
-      signal_client = signal_client_;
+      signal_transport = signal_transport_;
     } else {
       current_peer_ = from;
       current_call_id_ = call_id;
@@ -217,8 +219,8 @@ void CallManager::HandleCallRequest(const std::string& from,
   }
 
   if (busy) {
-    if (signal_client) {
-      signal_client->SendCallResponse(from, call_id, false, "busy");
+    if (signal_transport) {
+      signal_transport->SendCallResponse(from, call_id, false, "busy");
     }
     return;
   }
@@ -288,7 +290,8 @@ void CallManager::HandleCallEnd(const std::string& from,
   {
     std::lock_guard<std::mutex> lock(mutex_);
     if (current_peer_ != from || current_call_id_ != call_id ||
-        call_state_ == CallState::Idle || call_id.empty()) {
+        call_state_ == CallState::Idle || call_state_ == CallState::Ending ||
+        call_id.empty()) {
       return;
     }
     observer = observer_;
@@ -364,7 +367,7 @@ void CallManager::StartCallRequestTimer() {
   call_request_timer_thread_ = std::jthread([this, generation](std::stop_token stop_token) {
     const auto deadline =
         std::chrono::steady_clock::now() +
-        std::chrono::milliseconds(kCallRequestTimeoutMs);
+        call_request_timeout_;
     while (!stop_token.stop_requested() &&
            std::chrono::steady_clock::now() < deadline) {
       std::this_thread::sleep_for(std::chrono::milliseconds(100));
