@@ -26,12 +26,14 @@ export component AppWindow inherits Window {
     in-out property <string> dialog_kind: "Info";
     in-out property <string> dialog_title: "";
     in-out property <string> dialog_message: "";
+    in-out property <bool> remote_video_visible: false;
+    in-out property <bool> local_video_visible: false;
     in-out property <image> remote_video_image;
     in-out property <image> local_video_image;
-    in-out property <bool> remote_video_ready: false;
-    in-out property <bool> local_video_ready: false;
 
     property <length> sidebar_width: 250px;
+    property <length> local_preview_card_width: 240px;
+    property <length> local_preview_card_height: 135px;
 
     callback toggle_logs();
     callback connect_or_disconnect();
@@ -216,15 +218,9 @@ export component AppWindow inherits Window {
             Rectangle {
                 background: #000000;
                 clip: true;
+                horizontal-stretch: 1;
 
-                if remote_video_ready : Image {
-                    width: parent.width;
-                    height: parent.height;
-                    source: remote_video_image;
-                    image-fit: contain;
-                }
-
-                if !remote_video_ready : VerticalLayout {
+                if !remote_video_visible : VerticalLayout {
                     alignment: center;
                     Text {
                         text: "Waiting for video stream...";
@@ -234,14 +230,20 @@ export component AppWindow inherits Window {
                     }
                 }
 
-                if local_video_ready : Rectangle {
-                    width: 240px;
-                    height: 135px;
+                if remote_video_visible : Image {
+                    width: parent.width;
+                    height: parent.height;
+                    source: remote_video_image;
+                    image-fit: contain;
+                }
+
+                if local_video_visible : Rectangle {
+                    width: local_preview_card_width;
+                    height: local_preview_card_height;
                     x: parent.width - self.width - 24px;
                     y: parent.height - self.height - 24px;
                     background: #090e17;
                     border-radius: 8px;
-                    clip: true;
                     drop-shadow-blur: 24px;
                     drop-shadow-color: #000000a0;
                     drop-shadow-offset-y: 12px;
@@ -253,26 +255,7 @@ export component AppWindow inherits Window {
                         width: parent.width;
                         height: parent.height;
                         source: local_video_image;
-                        image-fit: cover;
-                    }
-
-                    Rectangle {
-                        width: 48px;
-                        height: 20px;
-                        x: 8px;
-                        y: 8px;
-                        border-radius: 4px;
-                        background: #00000099;
-                        Text {
-                            text: "You";
-                            color: #f8fafc;
-                            font-size: 11px;
-                            font-weight: 600;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                            width: parent.width;
-                            height: parent.height;
-                        }
+                        image-fit: contain;
                     }
                 }
             }

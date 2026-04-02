@@ -6,18 +6,14 @@
 #include <algorithm>
 #include <chrono>
 #include <ctime>
-#include <filesystem>
 #include <iomanip>
+#include <iostream>
+#include <memory>
 #include <optional>
 #include <sstream>
-#include <string_view>
 #include <utility>
 
-#include "generated/ui_paths.h"
-
 namespace {
-
-using InterpreterValue = slint::interpreter::Value;
 
 std::string BuildStatusLabel(bool connected) {
   return connected ? "Connected" : "Disconnected";
@@ -31,19 +27,12 @@ std::string BuildLogsToggleLabel(bool visible) {
   return visible ? "Hide Logs" : "Show Logs";
 }
 
-slint::SharedVector<InterpreterValue> ToSlintArray(
-    const std::vector<std::string>& items) {
-  slint::SharedVector<InterpreterValue> result;
-  for (const std::string& item : items) {
-    result.push_back(slint::SharedString(item));
-  }
-  return result;
-}
-
 }  // namespace
 
 SlintApp::SlintApp(ICallController* controller, AppConfig config)
     : controller_(controller), config_(std::move(config)) {
+  remote_renderer_.ConfigureDisplayOutput(960, 540, std::chrono::milliseconds(33));
+  local_renderer_.ConfigureDisplayOutput(320, 180, std::chrono::milliseconds(100));
   PushLog("info", "Application started");
 }
 
@@ -56,6 +45,9 @@ SlintApp::~SlintApp() {
 
 bool SlintApp::Initialize() {
   if (!LoadUi()) {
+    return false;
+  }
+  if (!InitializeVideoRenderer()) {
     return false;
   }
 
@@ -84,10 +76,10 @@ void SlintApp::OnStartLocalRenderer(webrtc::VideoTrackInterface* track) {
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
     state_.local_video_visible = true;
-    state_.local_video_ready = false;
   }
   local_renderer_.Clear();
   local_renderer_.SetVideoTrack(track);
+  video_renderer_bridge_.AttachLocalRenderer(&local_renderer_);
   PushLog("info", "Local video track attached");
   ScheduleUiRefresh();
 }
@@ -96,10 +88,9 @@ void SlintApp::OnStopLocalRenderer() {
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
     state_.local_video_visible = false;
-    state_.local_video_ready = false;
   }
   local_renderer_.Stop();
-  ClearVideoImage(true);
+  video_renderer_bridge_.DetachLocalRenderer();
   PushLog("info", "Local video track removed");
   ScheduleUiRefresh();
 }
@@ -108,10 +99,10 @@ void SlintApp::OnStartRemoteRenderer(webrtc::VideoTrackInterface* track) {
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
     state_.remote_video_visible = true;
-    state_.remote_video_ready = false;
   }
   remote_renderer_.Clear();
   remote_renderer_.SetVideoTrack(track);
+  video_renderer_bridge_.AttachRemoteRenderer(&remote_renderer_);
   PushLog("info", "Remote video track attached");
   ScheduleUiRefresh();
 }
@@ -120,10 +111,9 @@ void SlintApp::OnStopRemoteRenderer() {
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
     state_.remote_video_visible = false;
-    state_.remote_video_ready = false;
   }
   remote_renderer_.Stop();
-  ClearVideoImage(false);
+  video_renderer_bridge_.DetachRemoteRenderer();
   PushLog("info", "Remote video track removed");
   ScheduleUiRefresh();
 }
@@ -214,30 +204,29 @@ void SlintApp::OnIncomingCall(const std::string& caller_id) {
 }
 
 bool SlintApp::LoadUi() {
-  const std::filesystem::path ui_path =
-      std::filesystem::path(PEERCONNECTION_UI_DIR) / "AppWindow.slint";
+  if (GetEnvironmentVariableA("SLINT_BACKEND", nullptr, 0) == 0 &&
+      GetLastError() == ERROR_ENVVAR_NOT_FOUND) {
+    SetEnvironmentVariableA("SLINT_BACKEND", "winit-skia-opengl");
+  }
 
-  slint::interpreter::ComponentCompiler compiler;
-  const auto definition = compiler.build_from_path(ui_path.string());
-  if (!definition) {
-    std::ostringstream stream;
-    stream << "Failed to load Slint UI from " << ui_path.string();
-    for (const auto& diagnostic : compiler.diagnostics()) {
-      stream << "\n"
-             << (diagnostic.level ==
-                         slint::interpreter::DiagnosticLevel::Error
-                     ? "error"
-                     : "warning")
-             << ": " << ToStdString(diagnostic.source_file) << ":"
-             << diagnostic.line << ":" << diagnostic.column << " - "
-             << ToStdString(diagnostic.message);
-    }
-    OutputDebugStringA(stream.str().c_str());
+  ui_ = AppWindow::create();
+  return true;
+}
+
+bool SlintApp::InitializeVideoRenderer() {
+  if (!ui_) {
     return false;
   }
 
-  component_definition_ = *definition;
-  ui_ = component_definition_->create();
+  if (!video_renderer_bridge_.Initialize(ui_.value())) {
+    std::cerr
+        << "Failed to initialize Slint GPU video renderer. This build requires "
+           "an OpenGL-backed Slint renderer.\n";
+    return false;
+  }
+
+  ui_.value()->set_remote_video_image(slint::Image());
+  ui_.value()->set_local_video_image(slint::Image());
   return true;
 }
 
@@ -246,99 +235,90 @@ void SlintApp::BindCallbacks() {
     return;
   }
 
-  ui_.value()->set_property("signal_url", slint::SharedString(config_.signal_url));
-  ui_.value()->set_property("username", slint::SharedString(config_.username));
+  auto ui = ui_.value();
+  ui->set_signal_url(slint::SharedString(config_.signal_url));
+  ui->set_username(slint::SharedString(config_.username));
 
-  ui_.value()->set_callback("toggle_logs", [this](auto) {
+  ui->on_toggle_logs([this]() {
     {
       std::lock_guard<std::mutex> lock(state_mutex_);
       state_.logs_drawer_open = !state_.logs_drawer_open;
     }
     ApplyStateToUi();
-    return InterpreterValue();
   });
 
-  ui_.value()->set_callback("connect_or_disconnect", [this](auto) {
+  ui->on_connect_or_disconnect([this]() {
     const UiSnapshot snapshot = SnapshotState();
     if (snapshot.connected) {
       controller_->DisconnectFromSignalServer();
     } else {
       controller_->ConnectToSignalServer(config_.signal_url, config_.username);
     }
-    return InterpreterValue();
   });
 
-  ui_.value()->set_callback("select_peer", [this](std::span<const InterpreterValue> args) {
-    if (!args.empty()) {
-      if (const auto value = args[0].to_string()) {
-        std::lock_guard<std::mutex> lock(state_mutex_);
-        state_.selected_peer_id = ToStdString(*value);
-      }
+  ui->on_select_peer([this](slint::SharedString value) {
+    {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      state_.selected_peer_id = ToStdString(value);
     }
     ApplyStateToUi();
-    return InterpreterValue();
   });
 
-  ui_.value()->set_callback("start_call", [this](auto) {
+  ui->on_start_call([this]() {
     const UiSnapshot snapshot = SnapshotState();
     if (!snapshot.selected_peer_id.empty()) {
       controller_->StartCall(snapshot.selected_peer_id);
     }
-    return InterpreterValue();
   });
 
-  ui_.value()->set_callback("hang_up", [this](auto) {
+  ui->on_hang_up([this]() {
     controller_->EndCall();
-    return InterpreterValue();
   });
 
-  ui_.value()->set_callback("use_camera", [this](auto) {
-    LocalVideoSourceConfig config;
-    config.kind = LocalVideoSourceKind::Camera;
-    controller_->SetLocalVideoSource(config);
+  ui->on_use_camera([this]() {
+    LocalVideoSourceConfig local_config;
+    local_config.kind = LocalVideoSourceKind::Camera;
+    controller_->SetLocalVideoSource(local_config);
     ApplyStateToUi();
-    return InterpreterValue();
   });
 
-  ui_.value()->set_callback("open_media_file", [this](auto) {
+  ui->on_open_media_file([this]() {
     const std::optional<std::string> file_path = PromptForMediaFilePath();
-    if (file_path) {
-      LocalVideoSourceConfig config;
-      config.kind = LocalVideoSourceKind::File;
-      config.file_path = *file_path;
-      controller_->SetLocalVideoSource(config);
-      ApplyStateToUi();
+    if (!file_path) {
+      return;
     }
-    return InterpreterValue();
+
+    LocalVideoSourceConfig local_config;
+    local_config.kind = LocalVideoSourceKind::File;
+    local_config.file_path = *file_path;
+    controller_->SetLocalVideoSource(local_config);
+    ApplyStateToUi();
   });
 
-  ui_.value()->set_callback("accept_incoming", [this](auto) {
+  ui->on_accept_incoming([this]() {
     {
       std::lock_guard<std::mutex> lock(state_mutex_);
       state_.incoming_caller_id.reset();
     }
     controller_->AcceptCall();
     ApplyStateToUi();
-    return InterpreterValue();
   });
 
-  ui_.value()->set_callback("reject_incoming", [this](auto) {
+  ui->on_reject_incoming([this]() {
     {
       std::lock_guard<std::mutex> lock(state_mutex_);
       state_.incoming_caller_id.reset();
     }
     controller_->RejectCall("rejected");
     ApplyStateToUi();
-    return InterpreterValue();
   });
 
-  ui_.value()->set_callback("dismiss_dialog", [this](auto) {
+  ui->on_dismiss_dialog([this]() {
     {
       std::lock_guard<std::mutex> lock(state_mutex_);
       state_.dialog.reset();
     }
     ApplyStateToUi();
-    return InterpreterValue();
   });
 }
 
@@ -346,17 +326,11 @@ void SlintApp::StartTimers() {
   stats_timer_.start(slint::TimerMode::Repeated, std::chrono::seconds(1), [this]() {
     RefreshStats();
   });
-  video_timer_.start(slint::TimerMode::Repeated, std::chrono::milliseconds(33), [this]() {
-    RefreshVideoFrames();
-  });
 }
 
 void SlintApp::StopTimers() {
   if (stats_timer_.running()) {
     stats_timer_.stop();
-  }
-  if (video_timer_.running()) {
-    video_timer_.stop();
   }
 }
 
@@ -372,65 +346,52 @@ void SlintApp::ApplyStateToUi() {
                               !snapshot.selected_peer_id.empty();
   const bool can_hang_up = snapshot.call_state != CallState::Idle;
 
-  ui_.value()->set_property("connected", snapshot.connected);
-  ui_.value()->set_property("client_id", slint::SharedString(snapshot.client_id));
-  ui_.value()->set_property("selected_peer_id",
-                             slint::SharedString(snapshot.selected_peer_id));
-  ui_.value()->set_property("current_peer_id",
-                             slint::SharedString(snapshot.current_peer_id));
-  ui_.value()->set_property("connection_status_text",
-                             slint::SharedString(BuildStatusLabel(snapshot.connected)));
-  ui_.value()->set_property("connection_button_text",
-                             slint::SharedString(
-                                 BuildConnectionActionLabel(snapshot.connected)));
-  ui_.value()->set_property("logs_button_text",
-                             slint::SharedString(
-                                 BuildLogsToggleLabel(snapshot.logs_drawer_open)));
-  ui_.value()->set_property("logs_visible", snapshot.logs_drawer_open);
-  ui_.value()->set_property("call_state_text",
-                             slint::SharedString(
-                                 GetCallStateLabel(snapshot.call_state)));
-  ui_.value()->set_property("peer_text",
-                             slint::SharedString(
-                                 snapshot.current_peer_id.empty()
-                                     ? std::string("(none)")
-                                     : snapshot.current_peer_id));
-  ui_.value()->set_property("can_start_call", can_start_call);
-  ui_.value()->set_property("can_hang_up", can_hang_up);
-  ui_.value()->set_property("media_mode_text",
-                             slint::SharedString(
-                                 LocalVideoSourceKindToString(source_state.kind)));
-  ui_.value()->set_property(
-      "media_detail_text",
-      slint::SharedString(
-          !source_state.display_name.empty()
-              ? source_state.display_name
-              : (source_state.file_path.empty() ? std::string("Camera")
-                                                : source_state.file_path)));
-  ui_.value()->set_property("stats_text",
-                             slint::SharedString(BuildStatsText()));
-  ui_.value()->set_property("logs_text",
-                             slint::SharedString(BuildLogsText(snapshot)));
-  ui_.value()->set_property("clients", InterpreterValue(ToSlintArray(
-                                              BuildClientList(snapshot))));
-  ui_.value()->set_property("incoming_visible",
-                             snapshot.incoming_caller_id.has_value());
-  ui_.value()->set_property(
-      "incoming_caller_id",
+  auto ui = ui_.value();
+  ui->set_connected(snapshot.connected);
+  ui->set_client_id(slint::SharedString(snapshot.client_id));
+  ui->set_selected_peer_id(slint::SharedString(snapshot.selected_peer_id));
+  ui->set_current_peer_id(slint::SharedString(snapshot.current_peer_id));
+  ui->set_connection_status_text(slint::SharedString(
+      BuildStatusLabel(snapshot.connected)));
+  ui->set_connection_button_text(slint::SharedString(
+      BuildConnectionActionLabel(snapshot.connected)));
+  ui->set_logs_button_text(slint::SharedString(
+      BuildLogsToggleLabel(snapshot.logs_drawer_open)));
+  ui->set_logs_visible(snapshot.logs_drawer_open);
+  ui->set_call_state_text(slint::SharedString(
+      GetCallStateLabel(snapshot.call_state)));
+  ui->set_peer_text(slint::SharedString(
+      snapshot.current_peer_id.empty() ? std::string("(none)")
+                                       : snapshot.current_peer_id));
+  ui->set_can_start_call(can_start_call);
+  ui->set_can_hang_up(can_hang_up);
+  ui->set_media_mode_text(slint::SharedString(
+      LocalVideoSourceKindToString(source_state.kind)));
+  ui->set_media_detail_text(slint::SharedString(
+      !source_state.display_name.empty()
+          ? source_state.display_name
+          : (source_state.file_path.empty() ? std::string("Camera")
+                                            : source_state.file_path)));
+  ui->set_stats_text(slint::SharedString(BuildStatsText()));
+  ui->set_logs_text(slint::SharedString(BuildLogsText(snapshot)));
+  ui->set_clients(std::make_shared<slint::VectorModel<slint::SharedString>>(
+      BuildClientList(snapshot)));
+  ui->set_incoming_visible(snapshot.incoming_caller_id.has_value());
+  ui->set_incoming_caller_id(
       slint::SharedString(snapshot.incoming_caller_id.value_or("")));
-  ui_.value()->set_property("dialog_visible", snapshot.dialog.has_value());
-  ui_.value()->set_property(
-      "dialog_title",
-      slint::SharedString(snapshot.dialog ? snapshot.dialog->title : std::string()));
-  ui_.value()->set_property(
-      "dialog_message",
-      slint::SharedString(snapshot.dialog ? snapshot.dialog->message
-                                          : std::string()));
-  ui_.value()->set_property(
-      "dialog_kind",
-      slint::SharedString(snapshot.dialog && snapshot.dialog->error ? "Error"
-                                                                    : "Info"));
-  UpdateVideoProperties();
+  ui->set_dialog_visible(snapshot.dialog.has_value());
+  ui->set_dialog_title(slint::SharedString(
+      snapshot.dialog ? snapshot.dialog->title : std::string()));
+  ui->set_dialog_message(slint::SharedString(
+      snapshot.dialog ? snapshot.dialog->message : std::string()));
+  ui->set_dialog_kind(slint::SharedString(
+      snapshot.dialog && snapshot.dialog->error ? "Error" : "Info"));
+  ui->set_remote_video_visible(snapshot.remote_video_visible);
+  ui->set_local_video_visible(snapshot.local_video_visible);
+
+  if (snapshot.remote_video_visible || snapshot.local_video_visible) {
+    video_renderer_bridge_.RequestRedraw();
+  }
 }
 
 void SlintApp::ScheduleUiRefresh() {
@@ -454,124 +415,6 @@ void SlintApp::RefreshStats() {
     return;
   }
   ApplyStateToUi();
-}
-
-void SlintApp::RefreshVideoFrames() {
-  if (!ui_) {
-    return;
-  }
-
-  const UiSnapshot snapshot = SnapshotState();
-  bool remote_ready = snapshot.remote_video_ready;
-  bool local_ready = snapshot.local_video_ready;
-  bool changed = false;
-
-  changed = UpdateImageFromRenderer(&remote_renderer_, &remote_video_image_,
-                                    &remote_ready) || changed;
-  changed =
-      UpdateImageFromRenderer(&local_renderer_, &local_video_image_, &local_ready) ||
-      changed;
-
-  if (!snapshot.remote_video_ready && remote_ready) {
-    PushLog("info", "Remote video first frame received");
-  }
-  if (!snapshot.local_video_ready && local_ready) {
-    PushLog("info", "Local video first frame received");
-  }
-
-  {
-    std::lock_guard<std::mutex> lock(state_mutex_);
-    state_.remote_video_ready = remote_ready;
-    state_.local_video_ready = local_ready;
-  }
-
-  if (changed) {
-    UpdateVideoProperties();
-  }
-}
-
-void SlintApp::UpdateVideoProperties() {
-  if (!ui_) {
-    return;
-  }
-
-  const UiSnapshot snapshot = SnapshotState();
-  ui_.value()->set_property("remote_video_image",
-                            InterpreterValue(remote_video_image_));
-  ui_.value()->set_property("local_video_image",
-                            InterpreterValue(local_video_image_));
-  ui_.value()->set_property("remote_video_ready",
-                            snapshot.remote_video_visible &&
-                                snapshot.remote_video_ready);
-  ui_.value()->set_property("local_video_ready",
-                            snapshot.local_video_visible &&
-                                snapshot.local_video_ready);
-}
-
-bool SlintApp::UpdateImageFromRenderer(VideoRenderer* renderer,
-                                       slint::Image* image,
-                                       bool* ready) {
-  if (!renderer || !image || !ready) {
-    return false;
-  }
-
-  const auto latest_frame = renderer->ConsumeLatestFrame();
-  if (!latest_frame) {
-    return false;
-  }
-
-  if (latest_frame->width <= 0 || latest_frame->height <= 0 ||
-      latest_frame->pixels.empty()) {
-    *image = slint::Image();
-    *ready = false;
-    return true;
-  }
-
-  *image = ConvertFrameToImage(*latest_frame);
-  *ready = true;
-  return true;
-}
-
-slint::Image SlintApp::ConvertFrameToImage(const VideoRenderer::Frame& frame) {
-  slint::SharedPixelBuffer<slint::Rgba8Pixel> pixel_buffer(
-      static_cast<uint32_t>(frame.width), static_cast<uint32_t>(frame.height));
-
-  auto* pixels = pixel_buffer.begin();
-  const size_t pixel_count =
-      static_cast<size_t>(frame.width) * static_cast<size_t>(frame.height);
-
-  for (size_t i = 0; i < pixel_count; ++i) {
-    const size_t offset = i * 4;
-    pixels[i] = slint::Rgba8Pixel{
-        frame.pixels[offset + 2],
-        frame.pixels[offset + 1],
-        frame.pixels[offset + 0],
-        frame.pixels[offset + 3],
-    };
-  }
-
-  return slint::Image(std::move(pixel_buffer));
-}
-
-void SlintApp::ClearVideoImage(bool local) {
-  if (shutting_down_.load()) {
-    return;
-  }
-
-  auto clear_on_ui_thread = [this, local]() {
-    if (local) {
-      local_video_image_ = slint::Image();
-    } else {
-      remote_video_image_ = slint::Image();
-    }
-    UpdateVideoProperties();
-  };
-
-  if (event_loop_running_.load()) {
-    slint::invoke_from_event_loop(clear_on_ui_thread);
-  } else {
-    clear_on_ui_thread();
-  }
 }
 
 void SlintApp::PushLog(const std::string& level, const std::string& message) {
@@ -640,15 +483,15 @@ std::string SlintApp::BuildLogsText(const UiSnapshot& snapshot) const {
   return JoinLines(lines);
 }
 
-std::vector<std::string> SlintApp::BuildClientList(
+std::vector<slint::SharedString> SlintApp::BuildClientList(
     const UiSnapshot& snapshot) const {
-  std::vector<std::string> clients;
+  std::vector<slint::SharedString> clients;
   clients.reserve(snapshot.clients.size());
   for (const ClientInfo& client : snapshot.clients) {
     if (client.id == snapshot.client_id) {
       continue;
     }
-    clients.push_back(client.id);
+    clients.push_back(slint::SharedString(client.id));
   }
   return clients;
 }
@@ -657,12 +500,11 @@ std::optional<std::string> SlintApp::PromptForMediaFilePath() {
   if (!ui_) {
     return std::nullopt;
   }
-  auto ui = ui_.value();
 
   char file_buffer[MAX_PATH] = {};
   OPENFILENAMEA dialog = {};
   dialog.lStructSize = sizeof(dialog);
-  dialog.hwndOwner = ui->window().win32_hwnd();
+  dialog.hwndOwner = ui_.value()->window().win32_hwnd();
   dialog.lpstrFilter =
       "Media Files (*.mp4;*.mov;*.mkv;*.avi)\0*.mp4;*.mov;*.mkv;*.avi\0All Files (*.*)\0*.*\0";
   dialog.lpstrFile = file_buffer;

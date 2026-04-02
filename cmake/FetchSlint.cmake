@@ -24,9 +24,12 @@ function(ensure_slint_source)
     # does not force a full re-download on the next configure.
     set(FETCHCONTENT_BASE_DIR "${SLINT_FETCHCONTENT_BASE_DIR}" CACHE PATH "" FORCE)
 
-    # The application uses slint::interpreter::ComponentCompiler at runtime, so the
-    # interpreter feature must be enabled in the Slint runtime build.
-    set(SLINT_FEATURE_INTERPRETER ON CACHE BOOL "Enable Slint interpreter support" FORCE)
+    # The desktop client uses statically generated Slint components and rendering
+    # notifiers, so the interpreter runtime is not required.
+    set(SLINT_FEATURE_INTERPRETER OFF CACHE BOOL "Enable Slint interpreter support" FORCE)
+    set(SLINT_FEATURE_RENDERER_FEMTOVG OFF CACHE BOOL "Enable Slint FemtoVG renderer" FORCE)
+    set(SLINT_FEATURE_RENDERER_SKIA ON CACHE BOOL "Enable Slint Skia renderer" FORCE)
+    set(SLINT_FEATURE_RENDERER_SKIA_OPENGL ON CACHE BOOL "Enable Slint Skia OpenGL renderer" FORCE)
 
     FetchContent_Declare(
         Slint

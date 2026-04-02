@@ -27,18 +27,11 @@ ensure_ffmpeg_prebuilt()
 include(cmake/FetchSlint.cmake)
 ensure_slint_source()
 
-file(TO_CMAKE_PATH "${CMAKE_SOURCE_DIR}/ui" PEERCONNECTION_UI_DIR)
-configure_file(
-    "${CMAKE_SOURCE_DIR}/cmake/ui_paths.h.in"
-    "${CMAKE_BINARY_DIR}/generated/ui_paths.h"
-    @ONLY
-)
-
 add_executable(peerconnection_client
     WIN32
     src/main.cc
     src/slint_app.cc
-    src/native_video_host.cc
+    src/slint_video_renderer.cc
     src/call_coordinator.cc
     src/call_coordinator_ports.cc
     src/webrtcengine.cc
@@ -73,7 +66,7 @@ add_executable(peerconnection_client
     include/managed_video_track_source.h
     include/ffmpeg_file_source.h
     include/slint_app.h
-    include/native_video_host.h
+    include/slint_video_renderer.h
     include/signal_types.h
     include/signalclient.h
     include/signal_message_dispatcher.h
@@ -136,6 +129,7 @@ set(SYSTEM_LIBRARIES
     comdlg32
     ole32
     shell32
+    opengl32
     d3d11
     dxgi
     dxguid
