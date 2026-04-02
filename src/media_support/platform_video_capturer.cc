@@ -7,13 +7,18 @@
  *  in the file PATENTS.  All contributing project authors may
  *  be found in the AUTHORS file in the root of the source tree.
  */
-#ifndef TEST_PLATFORM_VIDEO_CAPTURER_H_
-#define TEST_PLATFORM_VIDEO_CAPTURER_H_
+#include "media_support/platform_video_capturer.h"
 
 #include <cstddef>
 #include <memory>
 
-#include "test/test_video_capturer.h"
+#include "absl/memory/memory.h"
+#include "media_support/test_video_capturer.h"
+#if defined(WEBRTC_MAC)
+#include "test/mac_capturer.h"
+#else
+#include "media_support/vcm_capturer.h"
+#endif
 
 namespace webrtc {
 namespace test {
@@ -22,9 +27,15 @@ std::unique_ptr<TestVideoCapturer> CreateVideoCapturer(
     size_t width,
     size_t height,
     size_t target_fps,
-    size_t capture_device_index);
+    size_t capture_device_index) {
+#if defined(WEBRTC_MAC)
+  return absl::WrapUnique<TestVideoCapturer>(test::MacCapturer::Create(
+      width, height, target_fps, capture_device_index));
+#else
+  return absl::WrapUnique<TestVideoCapturer>(test::VcmCapturer::Create(
+      width, height, target_fps, capture_device_index));
+#endif
+}
 
 }  // namespace test
 }  // namespace webrtc
-
-#endif  // TEST_PLATFORM_VIDEO_CAPTURER_H_

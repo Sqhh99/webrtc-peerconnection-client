@@ -1,0 +1,49 @@
+export component VideoStage inherits Rectangle {
+    in property <bool> remote_video_visible: false;
+    in property <bool> local_video_visible: false;
+    in property <image> remote_video_image;
+    in property <image> local_video_image;
+    in property <length> local_preview_card_width: 240px;
+    in property <length> local_preview_card_height: 135px;
+
+    background: #000000;
+    clip: true;
+
+    if !remote_video_visible : VerticalLayout {
+        alignment: center;
+        Text {
+            text: "Waiting for video stream...";
+            color: #334155;
+            font-size: 16px;
+            horizontal-alignment: center;
+        }
+    }
+
+    if remote_video_visible : Image {
+        width: parent.width;
+        height: parent.height;
+        source: remote_video_image;
+        image-fit: contain;
+    }
+
+    if local_video_visible : Rectangle {
+        width: local_preview_card_width;
+        height: local_preview_card_height;
+        x: parent.width - self.width - 24px;
+        y: parent.height - self.height - 24px;
+        background: #090e17;
+        border-radius: 8px;
+        drop-shadow-blur: 24px;
+        drop-shadow-color: #000000a0;
+        drop-shadow-offset-y: 12px;
+        border-width: 1px;
+        border-color: #1e293b;
+
+        Image {
+            width: parent.width;
+            height: parent.height;
+            source: local_video_image;
+            image-fit: contain;
+        }
+    }
+}

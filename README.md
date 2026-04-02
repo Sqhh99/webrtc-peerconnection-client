@@ -1,6 +1,6 @@
 # peerconnection_client
 
-A Windows-only WebRTC desktop client built with C++, SDL3, ImGui, Boost.Beast, and a custom signaling server.
+A Windows-only WebRTC desktop client built with C++, Slint, Boost.Beast, and a custom signaling server.
 
 ## Screenshot
 
@@ -18,6 +18,8 @@ A Windows-only WebRTC desktop client built with C++, SDL3, ImGui, Boost.Beast, a
 - Windows
 - Visual Studio C++ build tools
 - `clang-cl`
+- `rustc` 1.88 or newer
+- `cargo`
 - `cmake`
 - `ninja`
 
@@ -40,6 +42,7 @@ Notes:
 - `build.cmd clean` removes the whole `build\` directory
 - `build\compile_commands.json` is synchronized from the active config directory after configure/build
 - `build.cmd test` builds then runs `ctest --verbose` automatically for the selected config, showing each test case
+- the first build fetches Slint sources with CMake `FetchContent`; no manual Slint SDK install is required
 
 ## CMake preset
 

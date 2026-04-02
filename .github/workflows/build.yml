@@ -12,6 +12,7 @@ env:
   FFMPEG_PACKAGE_VERSION: n7.1.3-43-g5a1f107b4c
   FFMPEG_PACKAGE_TARGET: win64-lgpl-shared-7.1
   VCPKG_TARGET_TRIPLET: x64-windows-static
+  SLINT_GIT_TAG: v1.15.1
 
 jobs:
   build-windows:
@@ -24,16 +25,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.88.0
+
+      - name: Cache Rust Dependencies
+        uses: Swatinem/rust-cache@v2
+
       - name: Cache Third Party Dependencies
         uses: actions/cache@v4
         with:
           path: |
             third_party/_downloads
+            third_party/_deps
             third_party/webrtc
             third_party/ffmpeg
             third_party/vcpkg
             third_party/vcpkg_installed
-          key: deps-${{ runner.os }}-${{ env.WEBRTC_VERSION }}-${{ env.WEBRTC_PLATFORM }}-${{ env.FFMPEG_PACKAGE_VERSION }}-${{ env.FFMPEG_PACKAGE_TARGET }}-${{ env.VCPKG_TARGET_TRIPLET }}-${{ hashFiles('vcpkg.json') }}
+          key: deps-${{ runner.os }}-${{ env.WEBRTC_VERSION }}-${{ env.WEBRTC_PLATFORM }}-${{ env.FFMPEG_PACKAGE_VERSION }}-${{ env.FFMPEG_PACKAGE_TARGET }}-${{ env.VCPKG_TARGET_TRIPLET }}-${{ env.SLINT_GIT_TAG }}-${{ hashFiles('vcpkg.json', 'CMakeLists.txt', 'cmake/*.cmake') }}
 
       - name: Build And Test Release
         run: |

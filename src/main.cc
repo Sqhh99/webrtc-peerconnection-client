@@ -17,7 +17,7 @@
 #include "app_config.h"
 #include "call_coordinator.h"
 #include "defaults.h"
-#include "sdl_app.h"
+#include "ui/slint_app.h"
 
 namespace {
 
@@ -149,7 +149,7 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  SdlApp app(coordinator.get(), *config);
+  SlintApp app(coordinator.get(), *config);
   coordinator->SetUIObserver(&app);
   if (!app.Initialize()) {
     coordinator->Shutdown();

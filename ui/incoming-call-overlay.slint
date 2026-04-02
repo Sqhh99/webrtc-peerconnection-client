@@ -1,0 +1,57 @@
+import { Button } from "std-widgets.slint";
+
+export component IncomingCallOverlay inherits Rectangle {
+    in property <string> caller_id: "";
+    callback accept();
+    callback reject();
+
+    background: #00000099;
+    z: 100;
+
+    Rectangle {
+        width: 400px;
+        height: 180px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        background: #0f172a;
+        border-radius: 16px;
+        border-width: 1px;
+        border-color: #334155;
+        drop-shadow-blur: 32px;
+        drop-shadow-color: #00000099;
+        drop-shadow-offset-y: 12px;
+
+        VerticalLayout {
+            padding: 24px;
+            spacing: 16px;
+            alignment: center;
+
+            Text {
+                text: "Incoming Call";
+                color: #f8fafc;
+                font-size: 20px;
+                font-weight: 700;
+                horizontal-alignment: center;
+            }
+            Text {
+                text: caller_id + " is calling you...";
+                color: #cbd5e1;
+                font-size: 15px;
+                horizontal-alignment: center;
+            }
+
+            HorizontalLayout {
+                spacing: 16px;
+                alignment: end;
+                Button {
+                    text: "Decline";
+                    clicked => { root.reject(); }
+                }
+                Button {
+                    text: "Accept";
+                    clicked => { root.accept(); }
+                }
+            }
+        }
+    }
+}

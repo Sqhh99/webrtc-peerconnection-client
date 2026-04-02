@@ -1,0 +1,53 @@
+import { Button, ScrollView } from "std-widgets.slint";
+
+export component MessageDialogOverlay inherits Rectangle {
+    in property <string> dialog_kind: "Info";
+    in property <string> dialog_title: "";
+    in property <string> dialog_message: "";
+    callback dismiss();
+
+    background: #00000099;
+    z: 100;
+
+    Rectangle {
+        width: 440px;
+        height: 220px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        background: dialog_kind == "Error" ? #2a0e12 : #0f172a;
+        border-radius: 16px;
+        border-width: 1px;
+        border-color: dialog_kind == "Error" ? #7f1d1d : #334155;
+        drop-shadow-blur: 32px;
+        drop-shadow-color: dialog_kind == "Error" ? #7f1d1d60 : #00000099;
+        drop-shadow-offset-y: 12px;
+
+        VerticalLayout {
+            padding: 24px;
+            spacing: 16px;
+
+            Text {
+                text: dialog_title;
+                color: dialog_kind == "Error" ? #fca5a5 : #f8fafc;
+                font-size: 20px;
+                font-weight: 700;
+            }
+            ScrollView {
+                vertical-stretch: 1;
+                Text {
+                    text: dialog_message;
+                    color: #e2e8f0;
+                    font-size: 14px;
+                    wrap: word-wrap;
+                }
+            }
+            HorizontalLayout {
+                alignment: end;
+                Button {
+                    text: "Dismiss";
+                    clicked => { root.dismiss(); }
+                }
+            }
+        }
+    }
+}

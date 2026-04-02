@@ -46,6 +46,7 @@ if not defined FFMPEG_RELEASE_TAG set "FFMPEG_RELEASE_TAG=autobuild-2026-03-15-1
 if not defined FFMPEG_PACKAGE_VERSION set "FFMPEG_PACKAGE_VERSION=n7.1.3-43-g5a1f107b4c"
 if not defined FFMPEG_PACKAGE_TARGET set "FFMPEG_PACKAGE_TARGET=win64-lgpl-shared-7.1"
 if not defined VCPKG_TARGET_TRIPLET set "VCPKG_TARGET_TRIPLET=x64-windows-static"
+if not defined SLINT_GIT_TAG set "SLINT_GIT_TAG=v1.15.1"
 
 call :ensure_vs_env
 if errorlevel 1 exit /b 1
@@ -58,6 +59,9 @@ call :find_cmake
 if errorlevel 1 exit /b 1
 
 call :find_ninja
+if errorlevel 1 exit /b 1
+
+call :ensure_rust_toolchain
 if errorlevel 1 exit /b 1
 
 call :ensure_vcpkg
@@ -75,6 +79,7 @@ if errorlevel 1 (
 call cmake -S "%ROOT_DIR%" -B "%BUILD_DIR%" -G Ninja ^
     -DCMAKE_MAKE_PROGRAM:FILEPATH="%NINJA_EXE%" ^
     -DCMAKE_BUILD_TYPE=%BUILD_TYPE% ^
+    -DCMAKE_C_COMPILER=clang-cl ^
     -DCMAKE_CXX_COMPILER=clang-cl ^
     -DCMAKE_TOOLCHAIN_FILE:FILEPATH="%PROJECT_VCPKG_TOOLCHAIN%" ^
     -DVCPKG_TARGET_TRIPLET=%VCPKG_TARGET_TRIPLET% ^
@@ -84,6 +89,7 @@ call cmake -S "%ROOT_DIR%" -B "%BUILD_DIR%" -G Ninja ^
     -DFFMPEG_RELEASE_TAG=%FFMPEG_RELEASE_TAG% ^
     -DFFMPEG_PACKAGE_VERSION=%FFMPEG_PACKAGE_VERSION% ^
     -DFFMPEG_PACKAGE_TARGET=%FFMPEG_PACKAGE_TARGET% ^
+    -DSLINT_GIT_TAG=%SLINT_GIT_TAG% ^
     !EXTRA_CMAKE_ARGS!
 if errorlevel 1 exit /b 1
 
@@ -207,21 +213,70 @@ if not exist "%PROJECT_VCPKG_TOOLCHAIN%" (
 
 exit /b 0
 
+:ensure_rust_toolchain
+where rustc >nul 2>nul
+if errorlevel 1 (
+    echo [build.cmd] rustc was not found in PATH. Install Rust 1.88 or newer from https://rustup.rs/ before building the Slint UI.
+    exit /b 1
+)
+
+where cargo >nul 2>nul
+if errorlevel 1 (
+    echo [build.cmd] cargo was not found in PATH. Install Rust 1.88 or newer from https://rustup.rs/ before building the Slint UI.
+    exit /b 1
+)
+
+set "RUST_VERSION="
+for /f "tokens=2 delims= " %%I in ('rustc --version') do (
+    set "RUST_VERSION=%%I"
+    goto rust_version_found
+)
+
+:rust_version_found
+if not defined RUST_VERSION (
+    echo [build.cmd] Failed to parse the installed rustc version.
+    exit /b 1
+)
+
+for /f "tokens=1,2 delims=." %%I in ("%RUST_VERSION%") do (
+    set /a RUST_VERSION_MAJOR=%%I
+    set /a RUST_VERSION_MINOR=%%J
+)
+
+if %RUST_VERSION_MAJOR% GTR 1 exit /b 0
+if %RUST_VERSION_MAJOR% EQU 1 if %RUST_VERSION_MINOR% GEQ 88 exit /b 0
+
+echo [build.cmd] Rust %RUST_VERSION% is too old. Install Rust 1.88 or newer before building the Slint UI.
+exit /b 1
+
 :reset_stale_cmake_cache
 set "CACHE_FILE=%BUILD_DIR%\CMakeCache.txt"
 if not exist "%CACHE_FILE%" exit /b 0
 
 set "CACHED_NINJA="
 set "CACHED_TOOLCHAIN="
+set "CACHED_C_COMPILER="
+set "CACHED_CXX_COMPILER="
 for /f "usebackq tokens=2 delims==" %%I in (`findstr /B /C:"CMAKE_MAKE_PROGRAM:FILEPATH=" "%CACHE_FILE%"`) do (
     set "CACHED_NINJA=%%I"
 )
 for /f "usebackq tokens=2 delims==" %%I in (`findstr /B /C:"CMAKE_TOOLCHAIN_FILE:FILEPATH=" "%CACHE_FILE%"`) do (
     set "CACHED_TOOLCHAIN=%%I"
 )
+for /f "usebackq tokens=2 delims==" %%I in (`findstr /R /B /C:"CMAKE_C_COMPILER:.*=" "%CACHE_FILE%"`) do (
+    set "CACHED_C_COMPILER=%%I"
+)
+for /f "usebackq tokens=2 delims==" %%I in (`findstr /R /B /C:"CMAKE_CXX_COMPILER:.*=" "%CACHE_FILE%"`) do (
+    set "CACHED_CXX_COMPILER=%%I"
+)
 
+echo %CACHED_C_COMPILER% | findstr /I /C:"clang-cl" >nul
+if errorlevel 1 goto stale_cache
+echo %CACHED_CXX_COMPILER% | findstr /I /C:"clang-cl" >nul
+if errorlevel 1 goto stale_cache
 if /I "%CACHED_NINJA%"=="%NINJA_EXE%" if /I "%CACHED_TOOLCHAIN%"=="%PROJECT_VCPKG_TOOLCHAIN%" exit /b 0
 
+:stale_cache
 echo [build.cmd] Removing stale CMake cache in %BUILD_DIR%
 if exist "%BUILD_DIR%\CMakeCache.txt" del /f /q "%BUILD_DIR%\CMakeCache.txt" >nul
 if exist "%BUILD_DIR%\CMakeFiles" rmdir /s /q "%BUILD_DIR%\CMakeFiles"

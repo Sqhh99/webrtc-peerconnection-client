@@ -8,7 +8,7 @@
  *  be found in the AUTHORS file in the root of the source tree.
  */
 
-#include "test/frame_utils.h"
+#include "media_support/frame_utils.h"
 
 #include <cstdint>
 #include <cstdio>
