@@ -8,8 +8,8 @@
 #include <string>
 #include <vector>
 
-#include <slint/slint-interpreter.h>
-#include <slint/slint_timer.h>
+#include <slint-interpreter.h>
+#include <slint_timer.h>
 
 #include "app_config.h"
 #include "icall_observer.h"
