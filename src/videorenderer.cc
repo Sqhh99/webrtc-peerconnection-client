@@ -53,6 +53,7 @@ void VideoRenderer::Stop() {
   }
 
   latest_frame_ = Frame{};
+  standby_frame_ = Frame{};
   latest_frame_.frame_id = next_frame_id_++;
   frame_dirty_ = true;
   last_frame_time_ = std::chrono::steady_clock::time_point{};
@@ -61,6 +62,7 @@ void VideoRenderer::Stop() {
 void VideoRenderer::Clear() {
   std::lock_guard<std::mutex> lock(mutex_);
   latest_frame_ = Frame{};
+  standby_frame_ = Frame{};
   latest_frame_.frame_id = next_frame_id_++;
   frame_dirty_ = true;
   last_frame_time_ = std::chrono::steady_clock::time_point{};
@@ -77,6 +79,9 @@ std::optional<VideoRenderer::Frame> VideoRenderer::ConsumeLatestFrame() {
 
 void VideoRenderer::OnFrame(const webrtc::VideoFrame& video_frame) {
   const auto now = std::chrono::steady_clock::now();
+  Frame frame;
+  int max_width = 0;
+  int max_height = 0;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     if (min_frame_interval_ > std::chrono::milliseconds::zero() &&
@@ -85,6 +90,10 @@ void VideoRenderer::OnFrame(const webrtc::VideoFrame& video_frame) {
       return;
     }
     last_frame_time_ = now;
+    max_width = max_width_;
+    max_height = max_height_;
+    frame = std::move(standby_frame_);
+    standby_frame_ = Frame{};
   }
 
   webrtc::scoped_refptr<webrtc::I420BufferInterface> buffer(
@@ -95,14 +104,6 @@ void VideoRenderer::OnFrame(const webrtc::VideoFrame& video_frame) {
 
   int target_width = buffer->width();
   int target_height = buffer->height();
-
-  int max_width = 0;
-  int max_height = 0;
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    max_width = max_width_;
-    max_height = max_height_;
-  }
 
   if (max_width > 0 && max_height > 0 &&
       (target_width > max_width || target_height > max_height)) {
@@ -126,7 +127,6 @@ void VideoRenderer::OnFrame(const webrtc::VideoFrame& video_frame) {
     buffer = std::move(scaled_buffer);
   }
 
-  Frame frame;
   frame.width = buffer->width();
   frame.height = buffer->height();
   frame.pixels.resize(static_cast<size_t>(frame.width * frame.height * 4));
@@ -139,6 +139,9 @@ void VideoRenderer::OnFrame(const webrtc::VideoFrame& video_frame) {
   std::function<void()> frame_available_callback;
   {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (frame_dirty_) {
+      standby_frame_ = std::move(latest_frame_);
+    }
     frame.frame_id = next_frame_id_++;
     latest_frame_ = std::move(frame);
     frame_dirty_ = true;

@@ -6,6 +6,7 @@
 #include <optional>
 
 #include "AppWindow.h"
+#include <slint_image.h>
 #include "videorenderer.h"
 
 class SlintVideoRenderer {
@@ -19,21 +20,22 @@ class SlintVideoRenderer {
   void DetachLocalRenderer();
   void AttachRemoteRenderer(VideoRenderer* renderer);
   void DetachRemoteRenderer();
-  void RequestRedraw() const;
+  void RequestRedraw();
 
  private:
   struct TextureSlot {
     std::atomic<VideoRenderer*> renderer{nullptr};
     std::atomic_bool pending_clear{false};
-    uint32_t texture_id = 0;
+    bool buffers_ready = false;
     int width = 0;
     int height = 0;
     uint64_t frame_id = 0;
+    slint::SharedPixelBuffer<slint::Rgba8Pixel> front_buffer;
+    slint::SharedPixelBuffer<slint::Rgba8Pixel> back_buffer;
     slint::Image image;
   };
 
-  void OnRenderingNotification(slint::RenderingState state,
-                               slint::GraphicsAPI graphics_api);
+  void FlushPendingFrames();
   void SyncRemoteTexture(AppWindow& ui);
   void SyncLocalTexture(AppWindow& ui);
   void SyncTexture(TextureSlot& slot,
@@ -42,20 +44,14 @@ class SlintVideoRenderer {
   void ClearTexture(TextureSlot& slot,
                     AppWindow& ui,
                     void (AppWindow::*setter)(const slint::Image&) const);
-  void EnsureTexture(TextureSlot& slot,
-                     AppWindow& ui,
-                     int width,
-                     int height,
-                     void (AppWindow::*setter)(const slint::Image&) const);
+  bool EnsureBuffers(TextureSlot& slot, int width, int height);
   void DestroyTexture(TextureSlot& slot);
 
   slint::ComponentWeakHandle<AppWindow> ui_;
   TextureSlot remote_;
   TextureSlot local_;
-  mutable std::atomic_bool redraw_pending_{false};
+  std::atomic_bool redraw_pending_{false};
   bool initialized_ = false;
-  bool opengl_available_ = false;
-  bool logged_non_opengl_api_ = false;
 };
 
 #endif  // SLINT_VIDEO_RENDERER_H_GUARD

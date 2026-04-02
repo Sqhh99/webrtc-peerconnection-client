@@ -1,17 +1,7 @@
 #include "slint_video_renderer.h"
 
-#include <windows.h>
-#include <GL/gl.h>
-
-#include <iostream>
+#include <cstring>
 #include <utility>
-
-namespace {
-
-constexpr GLint kLinearFilter = 0x2601;
-constexpr GLint kClampToEdge = 0x812F;
-
-}  // namespace
 
 bool SlintVideoRenderer::Initialize(const slint::ComponentHandle<AppWindow>& ui) {
   if (initialized_) {
@@ -19,13 +9,6 @@ bool SlintVideoRenderer::Initialize(const slint::ComponentHandle<AppWindow>& ui)
   }
 
   ui_ = ui;
-  if (auto error = ui->window().set_rendering_notifier(
-          [this](slint::RenderingState state, slint::GraphicsAPI graphics_api) {
-            OnRenderingNotification(state, graphics_api);
-          })) {
-    return false;
-  }
-
   initialized_ = true;
   return true;
 }
@@ -66,46 +49,25 @@ void SlintVideoRenderer::DetachRemoteRenderer() {
   RequestRedraw();
 }
 
-void SlintVideoRenderer::RequestRedraw() const {
+void SlintVideoRenderer::RequestRedraw() {
   if (redraw_pending_.exchange(true, std::memory_order_acq_rel)) {
     return;
   }
+
   const auto weak_ui = ui_;
   slint::invoke_from_event_loop([this, weak_ui]() {
     redraw_pending_.store(false, std::memory_order_release);
-    if (auto ui = weak_ui.lock()) {
-      (*ui)->window().request_redraw();
+    if (!weak_ui.lock()) {
+      return;
     }
+    FlushPendingFrames();
   });
 }
 
-void SlintVideoRenderer::OnRenderingNotification(slint::RenderingState state,
-                                                 slint::GraphicsAPI graphics_api) {
-  switch (state) {
-    case slint::RenderingState::RenderingSetup:
-      opengl_available_ = graphics_api == slint::GraphicsAPI::NativeOpenGL;
-      if (!opengl_available_ && !logged_non_opengl_api_) {
-        logged_non_opengl_api_ = true;
-        std::cerr << "Slint video renderer: current renderer is not NativeOpenGL; "
-                     "borrowed GL textures will stay disabled.\n";
-      }
-      break;
-    case slint::RenderingState::BeforeRendering:
-      if (!opengl_available_) {
-        return;
-      }
-      if (auto ui = ui_.lock()) {
-        SyncRemoteTexture(**ui);
-        SyncLocalTexture(**ui);
-      }
-      break;
-    case slint::RenderingState::AfterRendering:
-      break;
-    case slint::RenderingState::RenderingTeardown:
-      DestroyTexture(remote_);
-      DestroyTexture(local_);
-      opengl_available_ = false;
-      break;
+void SlintVideoRenderer::FlushPendingFrames() {
+  if (auto ui = ui_.lock()) {
+    SyncRemoteTexture(**ui);
+    SyncLocalTexture(**ui);
   }
 }
 
@@ -140,15 +102,20 @@ void SlintVideoRenderer::SyncTexture(
     return;
   }
 
-  EnsureTexture(slot, ui, frame->width, frame->height, setter);
+  if (!EnsureBuffers(slot, frame->width, frame->height)) {
+    return;
+  }
 
-  glBindTexture(GL_TEXTURE_2D, slot.texture_id);
-  glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-  glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, frame->width, frame->height, GL_RGBA,
-                  GL_UNSIGNED_BYTE, frame->pixels.data());
-  glBindTexture(GL_TEXTURE_2D, 0);
+  const size_t pixel_count =
+      static_cast<size_t>(frame->width) * static_cast<size_t>(frame->height);
+  auto* destination = slot.back_buffer.begin();
+  std::memcpy(destination, frame->pixels.data(),
+              pixel_count * sizeof(slint::Rgba8Pixel));
 
   slot.frame_id = frame->frame_id;
+  slot.image = slint::Image(slot.back_buffer);
+  (ui.*setter)(slot.image);
+  std::swap(slot.front_buffer, slot.back_buffer);
 }
 
 void SlintVideoRenderer::ClearTexture(
@@ -159,48 +126,29 @@ void SlintVideoRenderer::ClearTexture(
   (ui.*setter)(slint::Image());
 }
 
-void SlintVideoRenderer::EnsureTexture(
-    TextureSlot& slot,
-    AppWindow& ui,
-    int width,
-    int height,
-    void (AppWindow::*setter)(const slint::Image&) const) {
-  if (slot.texture_id != 0 && slot.width == width && slot.height == height) {
-    return;
+bool SlintVideoRenderer::EnsureBuffers(TextureSlot& slot, int width, int height) {
+  if (slot.buffers_ready && slot.width == width && slot.height == height) {
+    return true;
   }
 
-  DestroyTexture(slot);
-
-  GLuint texture_id = 0;
-  glGenTextures(1, &texture_id);
-  glBindTexture(GL_TEXTURE_2D, texture_id);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, kLinearFilter);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, kLinearFilter);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, kClampToEdge);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, kClampToEdge);
-  glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA,
-               GL_UNSIGNED_BYTE, nullptr);
-  glBindTexture(GL_TEXTURE_2D, 0);
-
-  slot.texture_id = texture_id;
+  slot.front_buffer = slint::SharedPixelBuffer<slint::Rgba8Pixel>(
+      static_cast<uint32_t>(width), static_cast<uint32_t>(height));
+  slot.back_buffer = slint::SharedPixelBuffer<slint::Rgba8Pixel>(
+      static_cast<uint32_t>(width), static_cast<uint32_t>(height));
   slot.width = width;
   slot.height = height;
   slot.frame_id = 0;
-  slot.image = slint::Image::create_from_borrowed_gl_2d_rgba_texture(
-      slot.texture_id,
-      {static_cast<uint32_t>(slot.width), static_cast<uint32_t>(slot.height)});
-  (ui.*setter)(slot.image);
+  slot.buffers_ready = true;
+  slot.image = slint::Image();
+  return true;
 }
 
 void SlintVideoRenderer::DestroyTexture(TextureSlot& slot) {
-  if (slot.texture_id != 0) {
-    GLuint texture_id = slot.texture_id;
-    glDeleteTextures(1, &texture_id);
-  }
-  slot.texture_id = 0;
+  slot.buffers_ready = false;
   slot.width = 0;
   slot.height = 0;
   slot.frame_id = 0;
+  slot.front_buffer = slint::SharedPixelBuffer<slint::Rgba8Pixel>();
+  slot.back_buffer = slint::SharedPixelBuffer<slint::Rgba8Pixel>();
   slot.image = slint::Image();
 }

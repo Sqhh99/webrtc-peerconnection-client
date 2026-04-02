@@ -31,8 +31,10 @@ std::string BuildLogsToggleLabel(bool visible) {
 
 SlintApp::SlintApp(ICallController* controller, AppConfig config)
     : controller_(controller), config_(std::move(config)) {
-  remote_renderer_.ConfigureDisplayOutput(960, 540, std::chrono::milliseconds(33));
-  local_renderer_.ConfigureDisplayOutput(320, 180, std::chrono::milliseconds(100));
+  remote_renderer_.ConfigureDisplayOutput(1280, 720,
+                                          std::chrono::milliseconds(33));
+  local_renderer_.ConfigureDisplayOutput(640, 360,
+                                         std::chrono::milliseconds(41));
   PushLog("info", "Application started");
 }
 
@@ -204,11 +206,6 @@ void SlintApp::OnIncomingCall(const std::string& caller_id) {
 }
 
 bool SlintApp::LoadUi() {
-  if (GetEnvironmentVariableA("SLINT_BACKEND", nullptr, 0) == 0 &&
-      GetLastError() == ERROR_ENVVAR_NOT_FOUND) {
-    SetEnvironmentVariableA("SLINT_BACKEND", "winit-skia-opengl");
-  }
-
   ui_ = AppWindow::create();
   return true;
 }
@@ -219,9 +216,7 @@ bool SlintApp::InitializeVideoRenderer() {
   }
 
   if (!video_renderer_bridge_.Initialize(ui_.value())) {
-    std::cerr
-        << "Failed to initialize Slint GPU video renderer. This build requires "
-           "an OpenGL-backed Slint renderer.\n";
+    std::cerr << "Failed to initialize Slint video renderer bridge.\n";
     return false;
   }
 

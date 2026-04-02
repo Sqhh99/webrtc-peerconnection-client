@@ -39,6 +39,7 @@ class VideoRenderer : public webrtc::VideoSinkInterface<webrtc::VideoFrame> {
  private:
   std::mutex mutex_;
   Frame latest_frame_;
+  Frame standby_frame_;
   bool frame_dirty_ = false;
   uint64_t next_frame_id_ = 1;
   int max_width_ = 0;
