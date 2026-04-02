@@ -8,7 +8,7 @@
  *  be found in the AUTHORS file in the root of the source tree.
  */
 
-#include "test/frame_generator_capturer.h"
+#include "media_support/frame_generator_capturer.h"
 
 #include <algorithm>
 #include <cmath>
@@ -31,8 +31,8 @@
 #include "rtc_base/synchronization/mutex.h"
 #include "rtc_base/task_utils/repeating_task.h"
 #include "system_wrappers/include/clock.h"
-#include "test/frame_utils.h"
-#include "test/test_video_capturer.h"
+#include "media_support/frame_utils.h"
+#include "media_support/test_video_capturer.h"
 
 namespace webrtc {
 namespace test {

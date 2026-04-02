@@ -27,11 +27,21 @@ ensure_ffmpeg_prebuilt()
 include(cmake/FetchSlint.cmake)
 ensure_slint_source()
 
+if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND
+   CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    get_target_property(_slint_compile_options Slint INTERFACE_COMPILE_OPTIONS)
+    if(_slint_compile_options)
+        list(REMOVE_ITEM _slint_compile_options "$<$<CXX_COMPILER_ID:Clang>:-Wa,-mbig-obj>")
+        set_property(TARGET Slint PROPERTY INTERFACE_COMPILE_OPTIONS "${_slint_compile_options}")
+    endif()
+    target_compile_options(Slint INTERFACE /bigobj)
+endif()
+
 add_executable(peerconnection_client
     WIN32
     src/main.cc
-    src/slint_app.cc
-    src/slint_video_renderer.cc
+    src/ui/backend/slint_app.cc
+    src/ui/backend/slint_video_renderer.cc
     src/call_coordinator.cc
     src/call_coordinator_ports.cc
     src/webrtcengine.cc
@@ -47,13 +57,13 @@ add_executable(peerconnection_client
     src/ice_disconnect_watchdog.cc
     src/ffmpeg_file_source.cc
     src/switchable_audio_input_win.cc
-    src/test_impl.cc
-    test/platform_video_capturer.cc
-    test/vcm_capturer.cc
-    test/test_video_capturer.cc
-    test/frame_generator.cc
-    test/frame_generator_capturer.cc
-    test/frame_utils.cc
+    src/media_support/webrtc_test_shims.cc
+    src/media_support/platform_video_capturer.cc
+    src/media_support/vcm_capturer.cc
+    src/media_support/test_video_capturer.cc
+    src/media_support/frame_generator.cc
+    src/media_support/frame_generator_capturer.cc
+    src/media_support/frame_utils.cc
     include/app_config.h
     include/call_coordinator.h
     include/call_coordinator_ports.h
@@ -65,13 +75,19 @@ add_executable(peerconnection_client
     include/local_media_source.h
     include/managed_video_track_source.h
     include/ffmpeg_file_source.h
-    include/slint_app.h
-    include/slint_video_renderer.h
+    include/media_support/frame_generator.h
+    include/media_support/frame_generator_capturer.h
+    include/media_support/frame_utils.h
+    include/media_support/platform_video_capturer.h
+    include/media_support/test_video_capturer.h
+    include/media_support/vcm_capturer.h
     include/signal_types.h
     include/signalclient.h
     include/signal_message_dispatcher.h
     include/signaling_codec.h
     include/switchable_audio_input_win.h
+    include/ui/slint_app.h
+    include/ui/slint_video_renderer.h
     include/videorenderer.h
     include/webrtcengine.h
     src/webrtcengine_internal.h
@@ -129,10 +145,6 @@ set(SYSTEM_LIBRARIES
     comdlg32
     ole32
     shell32
-    opengl32
-    d3d11
-    dxgi
-    dxguid
 )
 
 target_link_libraries(
@@ -146,7 +158,7 @@ target_link_libraries(
         ${SYSTEM_LIBRARIES}
 )
 
-slint_target_sources(peerconnection_client ui/AppWindow.slint)
+slint_target_sources(peerconnection_client ui/app-window.slint)
 
 if(BUILD_TESTING)
     find_package(GTest CONFIG REQUIRED)

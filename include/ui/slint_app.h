@@ -10,10 +10,10 @@
 
 #include <slint_timer.h>
 
-#include "AppWindow.h"
+#include "app-window.h"
 #include "app_config.h"
 #include "icall_observer.h"
-#include "slint_video_renderer.h"
+#include "ui/slint_video_renderer.h"
 #include "videorenderer.h"
 
 class SlintApp : public ICallUIObserver {

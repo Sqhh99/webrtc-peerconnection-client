@@ -1,0 +1,55 @@
+import { ScrollView } from "std-widgets.slint";
+
+export component LogsPanel inherits Rectangle {
+    in property <string> logs_text: "";
+
+    width: 380px;
+    background: #0b111a;
+
+    Rectangle {
+        width: 1px;
+        height: parent.height;
+        x: 0;
+        background: #1e293b;
+    }
+
+    VerticalLayout {
+        padding: 16px;
+        spacing: 12px;
+        x: 1px;
+        width: parent.width - 1px;
+
+        Text {
+            text: "SYSTEM LOGS";
+            color: #64748b;
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 1px;
+        }
+
+        Rectangle {
+            vertical-stretch: 1;
+            background: #05080f;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: #1e293b;
+            clip: true;
+
+            ScrollView {
+                width: parent.width;
+                height: parent.height;
+
+                VerticalLayout {
+                    padding: 12px;
+                    Text {
+                        text: logs_text;
+                        color: #cbd5e1;
+                        font-family: "Consolas";
+                        font-size: 11px;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+        }
+    }
+}

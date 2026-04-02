@@ -8,7 +8,7 @@
  *  be found in the AUTHORS file in the root of the source tree.
  */
 
-#include "test/test_video_capturer.h"
+#include "media_support/test_video_capturer.h"
 
 #include <optional>
 #include <utility>

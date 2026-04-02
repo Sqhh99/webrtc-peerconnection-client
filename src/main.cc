@@ -17,7 +17,7 @@
 #include "app_config.h"
 #include "call_coordinator.h"
 #include "defaults.h"
-#include "slint_app.h"
+#include "ui/slint_app.h"
 
 namespace {
 

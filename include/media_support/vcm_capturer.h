@@ -18,7 +18,7 @@
 #include "modules/video_capture/video_capture.h"
 #include "modules/video_capture/video_capture_defines.h"
 #include "rtc_base/logging.h"
-#include "test/test_video_capturer.h"
+#include "media_support/test_video_capturer.h"
 
 namespace webrtc {
 namespace test {

@@ -1,5 +1,5 @@
 #include <windows.h>
-#include "slint_app.h"
+#include "ui/slint_app.h"
 
 #include <commdlg.h>
 

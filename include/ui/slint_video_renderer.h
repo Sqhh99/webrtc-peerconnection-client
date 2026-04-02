@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <optional>
 
-#include "AppWindow.h"
+#include "app-window.h"
 #include <slint_image.h>
 #include "videorenderer.h"
 

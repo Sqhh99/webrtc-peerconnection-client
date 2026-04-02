@@ -7,10 +7,10 @@
 #include "modules/video_capture/video_capture_factory.h"
 #include "rtc_base/logging.h"
 #include "system_wrappers/include/clock.h"
-#include "test/frame_generator.h"
-#include "test/frame_generator_capturer.h"
-#include "test/platform_video_capturer.h"
-#include "test/test_video_capturer.h"
+#include "media_support/frame_generator.h"
+#include "media_support/frame_generator_capturer.h"
+#include "media_support/platform_video_capturer.h"
+#include "media_support/test_video_capturer.h"
 
 namespace {
 

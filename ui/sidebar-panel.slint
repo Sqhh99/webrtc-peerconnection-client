@@ -1,0 +1,160 @@
+import { Button, ScrollView } from "std-widgets.slint";
+
+export component SidebarPanel inherits Rectangle {
+    in property <bool> connected: false;
+    in property <string> signal_url: "";
+    in property <string> username: "";
+    in property <string> connection_status_text: "Disconnected";
+    in property <string> connection_button_text: "Reconnect";
+    in property <string> logs_button_text: "Show Logs";
+    in property <string> selected_peer_id: "";
+    in property <string> call_state_text: "Idle";
+    in property <string> peer_text: "(none)";
+    in property <bool> can_start_call: false;
+    in property <bool> can_hang_up: false;
+    in property <string> media_mode_text: "Camera";
+    in property <string> media_detail_text: "Camera";
+    in property <string> stats_text: "";
+    in property <[string]> clients: [];
+
+    callback toggle_logs();
+    callback connect_or_disconnect();
+    callback select_peer(string);
+    callback start_call();
+    callback hang_up();
+    callback use_camera();
+    callback open_media_file();
+
+    background: #0b111a;
+
+    VerticalLayout {
+        padding: 12px;
+        spacing: 16px;
+
+        VerticalLayout {
+            spacing: 8px;
+            vertical-stretch: 0;
+
+            VerticalLayout {
+                spacing: 2px;
+                Text { text: "PeerConnection"; color: #f8fafc; font-size: 16px; font-weight: 700; }
+                Text { text: signal_url; color: #475569; font-size: 10px; wrap: word-wrap; }
+            }
+
+            HorizontalLayout {
+                spacing: 4px;
+                Text { text: "User:"; color: #64748b; font-size: 11px; }
+                Text { text: username; color: #e2e8f0; font-size: 11px; font-weight: 600; horizontal-stretch: 1; }
+                Text { text: "Status:"; color: #64748b; font-size: 11px; }
+                Text { text: connection_status_text; color: connected ? #34d399 : #fb923c; font-size: 11px; font-weight: 600; }
+            }
+
+            HorizontalLayout {
+                spacing: 6px;
+                height: 28px;
+                Button { text: connection_button_text; clicked => { root.connect_or_disconnect(); } horizontal-stretch: 1; }
+                Button { text: logs_button_text; clicked => { root.toggle_logs(); } horizontal-stretch: 1; }
+            }
+        }
+
+        VerticalLayout {
+            spacing: 4px;
+            vertical-stretch: 0;
+            Text { text: "ONLINE USERS"; color: #475569; font-size: 10px; font-weight: 700; letter-spacing: 1px; }
+
+            for client in clients : Rectangle {
+                height: 24px;
+                border-radius: 4px;
+                background: selected_peer_id == client ? #2563eb1a : (client_touch.has-hover ? #ffffff08 : transparent);
+
+                Text {
+                    x: 8px;
+                    y: 5px;
+                    text: client;
+                    color: selected_peer_id == client ? #60a5fa : #cbd5e1;
+                    font-weight: selected_peer_id == client ? 600 : 400;
+                    font-size: 12px;
+                }
+
+                client_touch := TouchArea {
+                    clicked => { root.select_peer(client); }
+                }
+            }
+
+            if clients.length == 0 : HorizontalLayout {
+                padding-left: 2px;
+                Text {
+                    text: "No users online";
+                    color: #475569;
+                    font-size: 11px;
+                }
+            }
+        }
+
+        VerticalLayout {
+            spacing: 4px;
+            vertical-stretch: 0;
+            Text { text: "CALL CONTROLS (" + peer_text + ")"; color: #475569; font-size: 10px; font-weight: 700; letter-spacing: 1px; }
+
+            HorizontalLayout {
+                spacing: 6px;
+                height: 28px;
+                Button { text: "Call"; enabled: can_start_call; clicked => { root.start_call(); } horizontal-stretch: 1; }
+                Button { text: "Hang Up"; enabled: can_hang_up; clicked => { root.hang_up(); } horizontal-stretch: 1; }
+            }
+            HorizontalLayout {
+                padding-left: 2px;
+                Text { text: "State: " + call_state_text; color: #cbd5e1; font-size: 11px; }
+            }
+        }
+
+        VerticalLayout {
+            spacing: 4px;
+            vertical-stretch: 0;
+            Text { text: "MEDIA (" + media_mode_text + ")"; color: #475569; font-size: 10px; font-weight: 700; letter-spacing: 1px; }
+            HorizontalLayout {
+                padding-left: 2px;
+                Text { text: media_detail_text; color: #94a3b8; font-size: 10px; wrap: word-wrap; }
+            }
+
+            HorizontalLayout {
+                spacing: 6px;
+                height: 28px;
+                Button { text: "Camera"; clicked => { root.use_camera(); } horizontal-stretch: 1; }
+                Button { text: "File..."; clicked => { root.open_media_file(); } horizontal-stretch: 1; }
+            }
+        }
+
+        VerticalLayout {
+            spacing: 4px;
+            vertical-stretch: 1;
+
+            Text { text: "RTC STATS"; color: #475569; font-size: 10px; font-weight: 700; letter-spacing: 1px; }
+
+            Rectangle {
+                vertical-stretch: 1;
+                background: #05080f;
+                border-radius: 6px;
+                border-width: 1px;
+                border-color: #1e293b;
+                clip: true;
+
+                ScrollView {
+                    width: parent.width;
+                    height: parent.height;
+
+                    VerticalLayout {
+                        padding: 8px;
+                        Text {
+                            text: stats_text;
+                            color: #4ade80;
+                            font-size: 11px;
+                            font-family: "Consolas";
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

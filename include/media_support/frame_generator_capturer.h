@@ -28,7 +28,7 @@
 #include "rtc_base/task_utils/repeating_task.h"
 #include "rtc_base/thread_annotations.h"
 #include "system_wrappers/include/clock.h"
-#include "test/test_video_capturer.h"
+#include "media_support/test_video_capturer.h"
 
 namespace webrtc {
 namespace test {
